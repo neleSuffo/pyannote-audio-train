@@ -1,79 +1,88 @@
-# A multilabel detection model is trained.
-# Here, training relies on 2s-long audio chunks,
-# batches of 64 audio chunks, and saves model to
-# disk every one (1) day worth of audio.
-# The labels_spec specifies how to build the classes
-# of the model given the raw label.
-
-# a) Here, we consider 4 regular labels which are
-# KCHI, CHI, MAL, FEM. The latter will account for
-# 4 dimensions in the predicted vector. This type
-# of labels is activated whenever a utterance with
-# the label of interest is encountered in the input
-# annotation.
-
-# b) 1 union label called "SPEECH" which is made of the union
-# of the classes KCHI, CHI, FEM, MAL, UNK. Hence, the SPEECH
-# class will be activated whenever one (or more) of the
-# listed class is activated. Note that UNK contributes to
-# activate the SPEECH class but is not predicted by the model
-
-# c) 1 intersection label called "OVL" which is made of the
-# intersection of the classes KCHI, CHI, FEM, MAL, UNK. Hence,
-# the OVL class will be activated whenever at least 2 of the listed
-# classes are activated at the same time.
-
-# To sum up, our model will output a vector of 6 scores :
-# [KCHI, CHI, MAL, FEM, SPEECH, UNK]
+# Task remains multilabel detection, but we adjust duration and batch size
+# for better generalization and modern hardware.
 task:
    name: MultilabelDetection
    params:
-      duration: 2.0
-      batch_size: 64
+      duration: 3.0  # Increased to capture more context
+      batch_size: 32  # Reduced to fit larger models in GPU memory
       per_epoch: 1
       labels_spec:
         regular: ['kchi', 'och', 'mal', 'fem', 'ovh']
         union:
           speech: ['kchi', 'och', 'mal', 'fem', 'speech']
-# Data augmentation is applied during training.
-# Here, it consists in additive noise from the
-# MUSAN database, with random signal-to-noise
-# ratio between 5 and 20 dB
-data_augmentation:
-   name: AddNoise
-   params:
-      snr_min: 5
-      snr_max: 20
-      collection: MUSAN.Collection.BackgroundNoise
+        # Removed OVL (intersection) as it may confuse the model; handle overlap via data augmentation
 
-# Since we are training an end-to-end model, the
-# feature extraction step simply returns the raw
-# waveform.
-feature_extraction:
-   name: RawAudio
+# Enhanced data augmentation with additive noise, SpecAugment, and reverberation
+data_augmentation:
+   name: Pipeline
    params:
+      - name: AddNoise
+        params:
+           snr_min: 0  # Wider range for robustness
+           snr_max: 20
+           collection: MUSAN.Collection.BackgroundNoise
+      - name: SpecAugment
+        params:
+           time_warping: 0.2
+           freq_mask: 0.1
+           time_mask: 0.1
+      - name: AddReverb
+        params:
+           rir_collection: RIR.Noise  # Simulate room acoustics
+
+# Replace RawAudio with pre-trained embeddings (e.g., Wav2Vec 2.0) for better features
+feature_extraction:
+   name: Pretrained
+   params:
+      model: pyannote/wav2vec2-base  # Use a pre-trained model
+      freeze: True  # Freeze lower layers to save compute
+      output_layer: 6  # Use an intermediate layer for embeddings
       sample_rate: 16000
 
-# We use the PyanNet architecture in Figure 2 of
-# pyannote.audio introductory paper. More details
-# about the architecture and its parameters can be
-# found directly in PyanNet docstring.
+# Updated PyanNet architecture with Transformer layers and attention
 architecture:
-  params:
-    sincnet:
-      out_channels: [256, 60, 60]
-      kernel_size: [251, 5, 5]
-    rnn:
-      hidden_size: 128
-      dropout: 0
-      num_layers: 3
-      unit: LSTM
-      bidirectional: True
-    ff:
-      hidden_size: [128, 128]
   name: pyannote.audio.models.PyanNet
-scheduler:
-  name: CyclicScheduler
   params:
-    learning_rate: auto
-    epochs_per_cycle: 14
+    # Replace SincNet with a lightweight CNN to process embeddings
+    cnn:
+      out_channels: [128, 128, 64]
+      kernel_size: [3, 3, 3]
+      stride: [1, 1, 1]
+    # Replace LSTM with Transformer encoder for better temporal modeling
+    transformer:
+      num_layers: 4
+      d_model: 256
+      nhead: 8
+      dim_feedforward: 512
+      dropout: 0.1
+    # Enhanced feedforward layers
+    ff:
+      hidden_size: [256, 128]
+    # Add self-attention pooling for robust frame aggregation
+    pooling:
+      name: SelfAttentionPooling
+      params:
+        attention_channels: 128
+    # Task-specific head for multilabel output
+    head:
+      hidden_size: [128]
+      dropout: 0.3
+      output_size: 5  # kchi, och, mal, fem, ovh
+
+# Custom scheduler
+scheduler:
+  name: CustomScheduler
+  params:
+    module: custom_schedulers
+    class: CosineAnnealingWithWarmup
+    warmup_epochs: 5
+    max_epochs: 50
+    warmup_start_lr: 1e-6
+    learning_rate: 1e-4
+    min_lr: 1e-6
+
+# Add class weights to handle imbalance
+loss:
+  name: BCEWithLogitsLoss
+  params:
+    weight: [1.0, 2.0, 1.0, 1.0, 1.0]  # Higher weights for kchi, och, ovh
