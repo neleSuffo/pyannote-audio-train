@@ -1,0 +1,14 @@
+X:
+  dimension: 1
+database:
+  classes:
+  - ChildLens
+task: frame-wise multi-label classification
+y:
+  classes:
+  - kchi
+  - och
+  - mal
+  - fem
+  - ovh
+  - speech
