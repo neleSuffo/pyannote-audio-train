@@ -1,88 +1,57 @@
-# Task remains multilabel detection, but we adjust duration and batch size
-# for better generalization and modern hardware.
-task:
-   name: MultilabelDetection
-   params:
-      duration: 3.0  # Increased to capture more context
-      batch_size: 32  # Reduced to fit larger models in GPU memory
-      per_epoch: 1
-      labels_spec:
-        regular: ['kchi', 'och', 'mal', 'fem', 'ovh']
-        union:
-          speech: ['kchi', 'och', 'mal', 'fem', 'speech']
-        # Removed OVL (intersection) as it may confuse the model; handle overlap via data augmentation
-
-# Enhanced data augmentation with additive noise, SpecAugment, and reverberation
-data_augmentation:
-   name: Pipeline
-   params:
-      - name: AddNoise
-        params:
-           snr_min: 0  # Wider range for robustness
-           snr_max: 20
-           collection: MUSAN.Collection.BackgroundNoise
-      - name: SpecAugment
-        params:
-           time_warping: 0.2
-           freq_mask: 0.1
-           time_mask: 0.1
-      - name: AddReverb
-        params:
-           rir_collection: RIR.Noise  # Simulate room acoustics
-
-# Replace RawAudio with pre-trained embeddings (e.g., Wav2Vec 2.0) for better features
-feature_extraction:
-   name: Pretrained
-   params:
-      model: pyannote/wav2vec2-base  # Use a pre-trained model
-      freeze: True  # Freeze lower layers to save compute
-      output_layer: 6  # Use an intermediate layer for embeddings
-      sample_rate: 16000
-
-# Updated PyanNet architecture with Transformer layers and attention
 architecture:
   name: pyannote.audio.models.PyanNet
   params:
-    # Replace SincNet with a lightweight CNN to process embeddings
-    cnn:
-      out_channels: [128, 128, 64]
-      kernel_size: [3, 3, 3]
-      stride: [1, 1, 1]
-    # Replace LSTM with Transformer encoder for better temporal modeling
-    transformer:
-      num_layers: 4
-      d_model: 256
-      nhead: 8
-      dim_feedforward: 512
-      dropout: 0.1
-    # Enhanced feedforward layers
     ff:
-      hidden_size: [256, 128]
-    # Add self-attention pooling for robust frame aggregation
-    pooling:
-      name: SelfAttentionPooling
-      params:
-        attention_channels: 128
-    # Task-specific head for multilabel output
-    head:
-      hidden_size: [128]
-      dropout: 0.3
-      output_size: 5  # kchi, och, mal, fem, ovh
-
-# Custom scheduler
+      hidden_size:
+      - 128
+      - 128
+    rnn:
+      bidirectional: true
+      dropout: 0
+      hidden_size: 128
+      num_layers: 3
+      unit: LSTM
+    sincnet:
+      kernel_size:
+      - 251
+      - 5
+      - 5
+      out_channels:
+      - 256
+      - 60
+      - 60
+data_augmentation:
+  name: AddNoise
+  params:
+    collection: MUSAN.Collection.BackgroundNoise
+    snr_max: 20
+    snr_min: 5
+feature_extraction:
+  name: RawAudio
+  params:
+    sample_rate: 16000
 scheduler:
-  name: CustomScheduler
+  name: CyclicScheduler
   params:
-    module: custom_schedulers
-    class: CosineAnnealingWithWarmup
-    warmup_epochs: 5
-    max_epochs: 50
-    warmup_start_lr: 1e-6
-    learning_rate: 1e-4
-    min_lr: 1e-6
-
-# Add class weights to handle imbalance
-loss:
-  name: BCEWithLogitsLoss
+    epochs_per_cycle: 14
+    learning_rate: auto
+task:
+  name: MultilabelDetection
   params:
-    weight: [1.0, 2.0, 1.0, 1.0, 1.0]  # Higher weights for kchi, och, ovh
+    batch_size: 64
+    duration: 2.0
+    labels_spec:
+      regular:
+      - KCHI
+      - CHI
+      - MAL
+      - FEM
+      - OVH
+      union:
+        speech:
+        - KCHI
+        - CHI
+        - MAL
+        - FEM
+        - speech
+    per_epoch: 1
