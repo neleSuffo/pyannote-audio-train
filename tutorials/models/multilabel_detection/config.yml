@@ -20,12 +20,6 @@ architecture:
       - 256
       - 60
       - 60
-data_augmentation:
-  name: AddNoise
-  params:
-    collection: MUSAN.Collection.BackgroundNoise
-    snr_max: 20
-    snr_min: 5
 feature_extraction:
   name: RawAudio
   params:
@@ -46,12 +40,11 @@ task:
       - CHI
       - MAL
       - FEM
-      - OVH
       union:
-        speech:
+        SPEECH:
         - KCHI
         - CHI
-        - MAL
         - FEM
-        - speech
+        - MAL
+        - SPEECH
     per_epoch: 1
