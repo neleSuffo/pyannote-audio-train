@@ -50,7 +50,7 @@ setup(
         ],
     },
 
-    version=versioneer.get_version(),
+    version="0.0.1+jsalt.v5.344",
     cmdclass=versioneer.get_cmdclass(),
 
     description='Neural building blocks for speaker diarization',
