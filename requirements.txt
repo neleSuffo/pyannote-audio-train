@@ -3,6 +3,7 @@ librosa >= 0.7.0
 pandas >= 0.18.0
 pyannote.core == 3.7.1
 pyannote.database == 3.0.1
+pyannote.metrics >= 2.3
 pyannote.pipeline == 1.5
 pyYAML >= 3.12
 scikit-learn >= 0.20.2
@@ -16,3 +17,4 @@ pescador >= 2.1.0
 Pillow >= 6.2.1
 torch >= 1.4.0
 numba
+pyannote.db.musan
