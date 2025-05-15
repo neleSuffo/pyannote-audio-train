@@ -40,11 +40,12 @@ task:
       - CHI
       - MAL
       - FEM
+      - OVH
       union:
-        SPEECH:
+        speech:
         - KCHI
         - CHI
-        - FEM
         - MAL
-        - SPEECH
+        - FEM
+        - speech
     per_epoch: 1
