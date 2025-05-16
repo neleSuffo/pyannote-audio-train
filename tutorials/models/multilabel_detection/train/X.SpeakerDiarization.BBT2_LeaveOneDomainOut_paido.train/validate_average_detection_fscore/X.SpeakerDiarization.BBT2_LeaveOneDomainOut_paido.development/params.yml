@@ -1,7 +1,7 @@
 CHI:
   detection_fscore: 0.3046
   params:
-    min_duration_off: 0.1
+    min_duration_off: 2
     min_duration_on: 0.1
     offset: 0.1570
     onset: 0.1570
@@ -10,7 +10,7 @@ CHI:
 FEM:
   detection_fscore: 0.8421
   params:
-    min_duration_off: 0.1
+    min_duration_off: 2
     min_duration_on: 0.1
     offset: 0.3583
     onset: 0.3583
@@ -19,7 +19,7 @@ FEM:
 KCHI:
   detection_fscore: 0.8064
   params:
-    min_duration_off: 0.1
+    min_duration_off: 2
     min_duration_on: 0.1
     offset: 0.3739
     onset: 0.3739
@@ -28,7 +28,7 @@ KCHI:
 MAL:
   detection_fscore: 0.4368
   params:
-    min_duration_off: 0.1
+    min_duration_off: 2
     min_duration_on: 0.1
     offset: 0.1363
     onset: 0.1363
@@ -37,7 +37,7 @@ MAL:
 SPEECH:
   detection_fscore: 0.9032
   params:
-    min_duration_off: 0.1
+    min_duration_off: 2
     min_duration_on: 0.1
     offset: 0.4014
     onset: 0.4014
