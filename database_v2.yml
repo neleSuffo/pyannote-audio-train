@@ -1,0 +1,20 @@
+Databases:
+  ChildLens_v2: /home/nele_pauline_suffo/ProcessedData/childlens_audio/{uri}.wav
+  #MUSAN: ./musan/{uri}.wav
+
+Protocols:
+  ChildLens_v2:
+    SpeakerDiarization:
+      audio:
+        train:
+            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train.uem
+        development:
+            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/dev.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/dev.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/dev.uem
+        test:
+            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.uem
