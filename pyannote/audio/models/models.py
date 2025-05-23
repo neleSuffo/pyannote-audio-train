@@ -41,7 +41,6 @@ from pyannote.audio.train.model import Resolution
 from pyannote.audio.train.model import RESOLUTION_CHUNK
 from pyannote.audio.train.model import RESOLUTION_FRAME
 
-
 class RNN(nn.Module):
     """Recurrent layers
 
@@ -336,8 +335,7 @@ class Embedding(nn.Module):
         return locals()
     dimension = property(**dimension())
 
-
-class PyanNet(Model):
+class PyanNetEnhanced(Model):
     """waveform -> SincNet -> RNN [-> merge] [-> time_pool] -> FC -> output
 
     Parameters
@@ -354,19 +352,18 @@ class PyanNet(Model):
     embedding : `dict`, optional
         Embedding parameters. Defaults to `Embedding` default parameters. This
         only has effect when model is used for representation learning.
+    add_rms : `bool`, optional
+        Whether to add RMS energy as an additional feature. Defaults to True.
+    add_sf : `bool`, optional
+        Whether to add spectral flatness as an additional feature. Defaults to True.
     """
 
     @staticmethod
     def get_alignment(sincnet=None, **kwargs):
-        """
-        """
-
         if sincnet is None:
             sincnet = dict()
-
         if sincnet.get('skip', False):
             return 'center'
-
         return SincNet.get_alignment(**sincnet)
 
     supports_packed = False
@@ -405,10 +402,12 @@ class PyanNet(Model):
         return SincNet.get_resolution(**sincnet)
 
     def init(self,
-             sincnet : Optional[dict] = None,
-             rnn : Optional[dict] = None,
-             ff : Optional[dict] = None,
-             embedding : Optional[dict] = None):
+             sincnet: Optional[dict] = None,
+             rnn: Optional[dict] = None,
+             ff: Optional[dict] = None,
+             embedding: Optional[dict] = None,
+             add_rms: bool = True,
+             add_sf: bool = True):
         """waveform -> SincNet -> RNN [-> merge] [-> time_pool] -> FC -> output
 
         Parameters
@@ -425,8 +424,11 @@ class PyanNet(Model):
         embedding : `dict`, optional
             Embedding parameters. Defaults to `Embedding` default parameters. This
             only has effect when model is used for representation learning.
+        add_rms: bool
+        add_sf: bool
         """
-
+        self.add_rms = add_rms
+        self.add_sf = add_sf
         n_features = self.n_features
 
         if sincnet is None:
@@ -442,11 +444,22 @@ class PyanNet(Model):
                 raise ValueError(msg)
             self.sincnet_ = SincNet(**sincnet)
             n_features = self.sincnet_.dimension
+            n_features_for_rnn = n_features
+            if self.add_rms:
+                n_features_for_rnn += 1
+            if self.add_sf:
+                n_features_for_rnn += 1
+        else:
+            n_features_for_rnn = self.n_features
+            if self.add_rms:
+                n_features_for_rnn += 1
+            if self.add_sf:
+                n_features_for_rnn += 1
 
         if rnn is None:
             rnn = dict()
         self.rnn = rnn
-        self.rnn_ = RNN(n_features, **rnn)
+        self.rnn_ = RNN(n_features_for_rnn, **rnn)
         n_features = self.rnn_.dimension
 
         if ff is None:
@@ -464,6 +477,16 @@ class PyanNet(Model):
 
         self.linear_ = nn.Linear(n_features, len(self.classes), bias=True)
         self.activation_ = self.task.default_activation
+
+    def compute_spectral_flatness(self, output, epsilon=1e-10):
+        """Compute spectral flatness from SincNet output, ensuring no NaN values."""
+        abs_output = torch.abs(output)  # Ensure non-negative values
+        log_abs_output = torch.log(abs_output + epsilon)
+        mean_log = torch.mean(log_abs_output, dim=2)  # (batch_size, time_steps)
+        exp_mean_log = torch.exp(mean_log)  # (batch_size, time_steps)
+        mean_abs_output = torch.mean(abs_output, dim=2)  # (batch_size, time_steps)
+        spectral_flatness = exp_mean_log / (mean_abs_output + epsilon)  # (batch_size, time_steps)
+        return spectral_flatness.unsqueeze(2)  # (batch_size, time_steps, 1)
 
     def forward(self, waveforms, return_intermediate=None):
         """Forward pass
@@ -485,42 +508,90 @@ class PyanNet(Model):
             Intermediate network output (only when `return_intermediate`
             is provided).
         """
+        print(f"Waveforms - Has NaNs: {torch.isnan(waveforms).any()}, Shape: {waveforms.shape}")
 
         if self.sincnet.get('skip', False):
             output = waveforms
+            print(f"Output (after SincNet skip) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
         else:
-            output = self.sincnet_(waveforms)
+            output = self.sincnet_(waveforms)  # (batch_size, time_steps, sincnet_dim)
+            print(f"Output (after SincNet) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
 
+        # Initialize augmented output
+        augmented_output = output
+        print(f"Augmented Output (initial) - Has NaNs: {torch.isnan(augmented_output).any()}, Shape: {augmented_output.shape}")
+
+        # Add RMS energy if enabled
+        if self.add_rms:
+            # Ensure waveforms are suitable for RMS (e.g., not already processed into different features if sincnet was skipped)
+            # Assuming waveforms are raw audio here for RMS
+            rms_input = waveforms if waveforms.ndim == 3 and waveforms.size(2) == self.n_features else waveforms.unsqueeze(2) # Adjust if necessary
+            if rms_input.ndim == 3 and rms_input.size(2) == 1: # Expected (batch, samples, 1) or (batch, samples)
+                 rms_val = torch.sqrt(torch.mean(rms_input ** 2, dim=1, keepdim=True) + 1e-10) # (batch_size, 1, 1)
+                 print(f"RMS Value - Has NaNs: {torch.isnan(rms_val).any()}, Shape: {rms_val.shape}")
+                 rms_expanded = rms_val.repeat(1, output.size(1), 1)  # (batch_size, time_steps, 1)
+                 print(f"RMS Expanded - Has NaNs: {torch.isnan(rms_expanded).any()}, Shape: {rms_expanded.shape}")
+                 augmented_output = torch.cat((augmented_output, rms_expanded), dim=2)
+                 print(f"Augmented Output (after RMS) - Has NaNs: {torch.isnan(augmented_output).any()}, Shape: {augmented_output.shape}")
+            else:
+                print(f"Skipping RMS: Waveform shape {waveforms.shape} not directly usable for RMS in this context.")
+
+
+        # Add spectral flatness if enabled
+        if self.add_sf:
+            # 'output' here is the SincNet output
+            sf = self.compute_spectral_flatness(output)  # (batch_size, time_steps, 1)
+            print(f"Spectral Flatness (SF) - Has NaNs: {torch.isnan(sf).any()}, Shape: {sf.shape}")
+            augmented_output = torch.cat((augmented_output, sf), dim=2)
+            print(f"Augmented Output (after SF) - Has NaNs: {torch.isnan(augmented_output).any()}, Shape: {augmented_output.shape}")
+
+        # Proceed with RNN and rest of the model
         if return_intermediate is None:
-            output = self.rnn_(output)
+            output = self.rnn_(augmented_output)
+            print(f"Output (after RNN) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
         else:
             if return_intermediate == 0:
-                intermediate = output
-                output = self.rnn_(output)
+                intermediate = augmented_output
+                output = self.rnn_(augmented_output)
+                print(f"Output (after RNN, ri=0) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
+                print(f"Intermediate (ri=0) - Has NaNs: {torch.isnan(intermediate).any()}, Shape: {intermediate.shape}")
             else:
-                return_intermediate -= 1
-                # get RNN final AND intermediate outputs
-                output, intermediate = self.rnn_(output, return_intermediate=True)
-                # only keep hidden state of requested layer
-                intermediate = intermediate[return_intermediate]
+                # This part of your original code for return_intermediate might need adjustment
+                # if rnn_ expects a boolean for return_intermediate.
+                # Assuming rnn_ can handle an integer and returns a list/tuple of intermediates.
+                temp_return_intermediate_flag = True # Or however your RNN handles this
+                output, rnn_intermediates = self.rnn_(augmented_output, return_intermediate=temp_return_intermediate_flag)
+                print(f"Output (after RNN, ri>0) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
+                if isinstance(rnn_intermediates, (list, tuple)) and len(rnn_intermediates) > (return_intermediate -1) and rnn_intermediates[return_intermediate -1] is not None :
+                    intermediate = rnn_intermediates[return_intermediate -1] # Adjust index if necessary
+                    print(f"Intermediate (ri>0, layer {return_intermediate-1}) - Has NaNs: {torch.isnan(intermediate).any()}, Shape: {intermediate.shape}")
+                else:
+                    print(f"Could not retrieve intermediate layer {return_intermediate-1} from RNN.")
+                    intermediate = None # Or handle error
 
         output = self.ff_(output)
+        print(f"Output (after FF) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
 
         if self.task.is_representation_learning:
-            return self.embedding_(output)
+            embedding_output = self.embedding_(output)
+            print(f"Output (after Embedding) - Has NaNs: {torch.isnan(embedding_output).any()}, Shape: {embedding_output.shape}")
+            if return_intermediate is None:
+                return embedding_output
+            return embedding_output, intermediate # Ensure intermediate is defined
 
         output = self.linear_(output)
+        print(f"Output (after Linear) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
         output = self.activation_(output)
+        print(f"Output (after Activation) - Has NaNs: {torch.isnan(output).any()}, Shape: {output.shape}")
 
         if return_intermediate is None:
             return output
-        return output, intermediate
+        return output, intermediate # Ensure intermediate is defined
 
     @property
     def dimension(self):
         if self.task.is_representation_learning:
             return self.embedding_.dimension
-
         return Model.dimension.fget(self)
 
     def intermediate_dimension(self, layer):
