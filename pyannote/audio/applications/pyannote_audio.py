@@ -359,7 +359,6 @@ def main():
                         f'Could not load "{warm_start}" model from torch.hub.'
                         f'The following exception was raised:\n\n{e}\n\n')
                     sys.exit(msg)
-
             pretrained_config_yml = warm_start.parents[3] / 'config.yml'
 
         params['warm_start'] = warm_start
