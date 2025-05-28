@@ -177,7 +177,7 @@ class RawAudio:
 
         # TODO: how time consuming is this thing (needs profiling...)
         try:
-            valid = valid_audio(y[:, 0], mono=True)
+            valid = valid_audio(y[:, 0])
         except ParameterError as e:
             msg = (f"Something went wrong when augmenting waveform.")
             raise ValueError(msg)
