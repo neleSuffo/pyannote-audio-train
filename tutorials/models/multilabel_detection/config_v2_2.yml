@@ -8,13 +8,16 @@ architecture:
     rnn:
       bidirectional: true
       dropout: 0.2
-      hidden_size: 256
-      num_layers: 2
+      hidden_size: 512
+      num_layers: 3
       unit: GRU
     ff:
       hidden_size: [256, 128]
     add_rms: true
     add_sf: true
+    add_formants: true
+    add_pitch: true
+    add_mfcc: true
 feature_extraction:
   name: RawAudio
   params:
@@ -22,8 +25,8 @@ feature_extraction:
 scheduler:
   name: CyclicScheduler
   params:
-    epochs_per_cycle: 14
-    learning_rate: 0.001
+    epochs_per_cycle: 20
+    learning_rate: 0.0001
 task:
   name: MultilabelDetection
   params:
