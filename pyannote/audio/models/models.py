@@ -33,6 +33,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import logging
+import numpy as np
+import librosa
 from .sincnet import SincNet
 from .tdnn import XVectorNet
 from .pooling import TemporalPooling
@@ -359,7 +361,6 @@ class PyanNetEnhanced(Model):
     add_sf : `bool`, optional
         Whether to add spectral flatness as an additional feature. Defaults to True.
     """
-
     @staticmethod
     def get_alignment(sincnet=None, **kwargs):
         if sincnet is None:
@@ -371,9 +372,7 @@ class PyanNetEnhanced(Model):
     supports_packed = False
 
     @staticmethod
-    def get_resolution(sincnet : Optional[dict] = None,
-                       rnn : Optional[dict] = None,
-                       **kwargs) -> Resolution:
+    def get_resolution(sincnet: Optional[dict] = None, rnn: Optional[dict] = None, **kwargs) -> Resolution:
         """Get sliding window used for feature extraction
 
         Parameters
@@ -391,16 +390,12 @@ class PyanNetEnhanced(Model):
 
         if rnn is None:
             rnn = {'pool': None}
-
         if rnn.get('pool', None) is not None:
             return RESOLUTION_CHUNK
-
         if sincnet is None:
             sincnet = {'skip': False}
-
         if sincnet.get('skip', False):
             return RESOLUTION_FRAME
-
         return SincNet.get_resolution(**sincnet)
 
     def init(self,
@@ -409,7 +404,10 @@ class PyanNetEnhanced(Model):
              ff: Optional[dict] = None,
              embedding: Optional[dict] = None,
              add_rms: bool = True,
-             add_sf: bool = True):
+             add_sf: bool = True,
+             add_formants: bool = True,
+             add_pitch: bool = True,
+             add_mfcc: bool = True):
         """waveform -> SincNet -> RNN [-> merge] [-> time_pool] -> FC -> output
 
         Parameters
@@ -427,11 +425,22 @@ class PyanNetEnhanced(Model):
             Embedding parameters. Defaults to `Embedding` default parameters. This
             only has effect when model is used for representation learning.
         add_rms: bool
+            feature to extracrt
         add_sf: bool
+            feature to extract
+        add_formants: bool
+            feature to extract
+        add_pitch: bool
+            feature to extract
+        add_mfcc: bool
+            feature to extract
         """
-        print("--- PyanNetEnhanced init method CALLED ---", flush=True) # Add this
+        print("--- PyanNetEnhanced init method CALLED ---", flush=True)
         self.add_rms = add_rms
         self.add_sf = add_sf
+        self.add_formants = add_formants
+        self.add_pitch = add_pitch
+        self.add_mfcc = add_mfcc
         n_features = self.n_features
 
         if sincnet is None:
@@ -440,11 +449,7 @@ class PyanNetEnhanced(Model):
 
         if not sincnet.get('skip', False):
             if n_features != 1:
-                msg = (
-                    f'SincNet only supports mono waveforms. '
-                    f'Here, waveform has {n_features} channels.'
-                )
-                raise ValueError(msg)
+                raise ValueError(f'SincNet only supports mono waveforms. Here, waveform has {n_features} channels.')
             self.sincnet_ = SincNet(**sincnet)
             n_features = self.sincnet_.dimension
             n_features_for_rnn = n_features
@@ -452,18 +457,41 @@ class PyanNetEnhanced(Model):
                 n_features_for_rnn += 1
             if self.add_sf:
                 n_features_for_rnn += 1
+            if self.add_formants:
+                n_features_for_rnn += 2  # F1, F2
+            if self.add_pitch:
+                n_features_for_rnn += 1  # Pitch variation
+            if self.add_mfcc:
+                n_features_for_rnn += 6  # 6 MFCCs
         else:
             n_features_for_rnn = self.n_features
             if self.add_rms:
                 n_features_for_rnn += 1
             if self.add_sf:
                 n_features_for_rnn += 1
+            if self.add_formants:
+                n_features_for_rnn += 2
+            if self.add_pitch:
+                n_features_for_rnn += 1
+            if self.add_mfcc:
+                n_features_for_rnn += 6
+
+        # Feature normalization
+        self.norm_ = nn.BatchNorm1d(n_features_for_rnn)
+
+        # Feature fusion
+        self.fusion_ = nn.Linear(n_features_for_rnn, 64)
+        n_features_for_rnn = 64
 
         if rnn is None:
             rnn = dict()
         self.rnn = rnn
         self.rnn_ = RNN(n_features_for_rnn, **rnn)
         n_features = self.rnn_.dimension
+
+        # Attention mechanism
+        self.attention_ = nn.MultiheadAttention(n_features, num_heads=4, dropout=0.1)
+        self.attn_norm_ = nn.LayerNorm(n_features)
 
         if ff is None:
             ff = dict()
@@ -482,14 +510,92 @@ class PyanNetEnhanced(Model):
         self.activation_ = self.task.default_activation
 
     def compute_spectral_flatness(self, output, epsilon=1e-10):
-        """Compute spectral flatness from SincNet output, ensuring no NaN values."""
-        abs_output = torch.abs(output)  # Ensure non-negative values
+        abs_output = torch.abs(output)
         log_abs_output = torch.log(abs_output + epsilon)
-        mean_log = torch.mean(log_abs_output, dim=2)  # (batch_size, time_steps)
-        exp_mean_log = torch.exp(mean_log)  # (batch_size, time_steps)
-        mean_abs_output = torch.mean(abs_output, dim=2)  # (batch_size, time_steps)
-        spectral_flatness = exp_mean_log / (mean_abs_output + epsilon)  # (batch_size, time_steps)
-        return spectral_flatness.unsqueeze(2)  # (batch_size, time_steps, 1)
+        mean_log = torch.mean(log_abs_output, dim=2)
+        exp_mean_log = torch.exp(mean_log)
+        mean_abs_output = torch.mean(abs_output, dim=2)
+        spectral_flatness = exp_mean_log / (mean_abs_output + epsilon)
+        return spectral_flatness.unsqueeze(2)
+
+    def compute_formants(self, waveforms, n_frames, sample_rate=16000):
+        formants_list = []
+        for waveform_single in waveforms.cpu().numpy(): # Iterate over each waveform in the batch
+            try:
+                # Ensure waveform_single is 1D for librosa.lpc
+                waveform_1d = waveform_single.squeeze()
+                if waveform_1d.ndim == 0: # Handle case where squeeze results in 0-dim tensor
+                    waveform_1d = np.array([waveform_1d.item()])
+                elif waveform_1d.size == 0: # Handle empty waveform
+                    raise ValueError("Empty waveform provided to librosa.lpc")
+
+                lpc_order = 2 + sample_rate // 1000
+                # Ensure lpc_order is less than the length of the waveform segment
+                if lpc_order >= len(waveform_1d):
+                    lpc_order = max(1, len(waveform_1d) -1) # Adjust lpc_order if too large
+
+                if len(waveform_1d) == 0 or lpc_order <= 0: # Skip if waveform is too short or lpc_order is invalid
+                    freqs = np.zeros(2)
+                else:
+                    lpc_coeffs = librosa.lpc(waveform_1d, order=lpc_order)
+                    roots = np.roots(lpc_coeffs)
+                    roots = roots[np.imag(roots) >= 0]
+                    angles = np.angle(roots)
+                    raw_freqs = angles * (sample_rate / (2 * np.pi))
+                    # Filter frequencies to be within a reasonable range and sort
+                    valid_freqs = raw_freqs[np.logical_and(raw_freqs > 50, raw_freqs < (sample_rate / 2 - 100))] # Ensure below Nyquist
+                    valid_freqs = np.sort(valid_freqs)
+                    
+                    if len(valid_freqs) >= 2:
+                        freqs = valid_freqs[:2]  # Take the first two
+                    elif len(valid_freqs) == 1:
+                        freqs = np.array([valid_freqs[0], 0.0]) # Pad if only one formant
+                    else:
+                        freqs = np.zeros(2) # Default if no valid formants found
+            except Exception as e:
+                # logger.warning(f"Error computing formants: {e}. Returning zeros.") # Optional: log the error
+                freqs = np.zeros(2)
+            formants_list.append(freqs)
+        formants_tensor = torch.tensor(formants_list, dtype=torch.float32, device=waveforms.device)
+        # formants_tensor shape: (batch_size, 2)
+        return formants_tensor.unsqueeze(1).repeat(1, n_frames, 1) # Repeat across n_frames
+
+    def compute_pitch_variation(self, waveforms, n_frames, sample_rate=16000):
+        pitches_list = []
+        for waveform_single in waveforms.cpu().numpy(): # Iterate over each waveform in the batch
+            try:
+                waveform_1d = waveform_single.squeeze()
+                if waveform_1d.ndim == 0: waveform_1d = np.array([waveform_1d.item()])
+                if waveform_1d.size == 0: raise ValueError("Empty waveform")
+
+                pitch_track, voiced_flag, voiced_probs = librosa.pyin(waveform_1d, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'), sr=sample_rate)
+                valid_pitches = pitch_track[~np.isnan(pitch_track) & (pitch_track > 0)]
+                pitch_var_val = np.var(valid_pitches) if len(valid_pitches) > 1 else 0.0
+            except Exception as e:
+                # logger.warning(f"Error computing pitch variation: {e}. Returning zero.") # Optional: log the error
+                pitch_var_val = 0.0
+            pitches_list.append(pitch_var_val)
+        pitch_var_tensor = torch.tensor(pitches_list, dtype=torch.float32, device=waveforms.device)
+        # pitch_var_tensor shape: (batch_size)
+        return pitch_var_tensor.unsqueeze(1).unsqueeze(2).repeat(1, n_frames, 1) # Repeat across n_frames
+
+    def compute_mfcc(self, waveforms, n_frames, sample_rate=16000, n_mfcc=6):
+        mfccs_list = []
+        for waveform_single in waveforms.cpu().numpy(): # Iterate over each waveform in the batch
+            try:
+                waveform_1d = waveform_single.squeeze()
+                if waveform_1d.ndim == 0: waveform_1d = np.array([waveform_1d.item()])
+                if waveform_1d.size == 0: raise ValueError("Empty waveform")
+
+                mfcc_features = librosa.feature.mfcc(y=waveform_1d, sr=sample_rate, n_mfcc=n_mfcc)
+                mfcc_mean = np.mean(mfcc_features, axis=1)  # Average over time frames of MFCC
+            except Exception as e:
+                # logger.warning(f"Error computing MFCCs: {e}. Returning zeros.") # Optional: log the error
+                mfcc_mean = np.zeros(n_mfcc)
+            mfccs_list.append(mfcc_mean)
+        mfccs_tensor = torch.tensor(mfccs_list, dtype=torch.float32, device=waveforms.device)
+        # mfccs_tensor shape: (batch_size, n_mfcc)
+        return mfccs_tensor.unsqueeze(1).repeat(1, n_frames, 1) # Repeat across n_frames
 
     def forward(self, waveforms, return_intermediate=None):
         """Forward pass
@@ -514,33 +620,49 @@ class PyanNetEnhanced(Model):
         if self.sincnet.get('skip', False):
             output = waveforms
         else:
-            output = self.sincnet_(waveforms)  # (batch_size, time_steps, sincnet_dim)
+            output = self.sincnet_(waveforms)
 
-        # Initialize augmented output
+        n_frames_target = output.size(1) # Get the number of frames from SincNet's output
+
         augmented_output = output
 
-        # Add RMS energy if enabled
         if self.add_rms:
-            print("Adding RMS energy feature to the output", flush=True)
-            # Ensure waveforms are suitable for RMS (e.g., not already processed into different features if sincnet was skipped)
-            # Assuming waveforms are raw audio here for RMS
-            rms_input = waveforms if waveforms.ndim == 3 and waveforms.size(2) == self.n_features else waveforms.unsqueeze(2) # Adjust if necessary
-            if rms_input.ndim == 3 and rms_input.size(2) == 1: # Expected (batch, samples, 1) or (batch, samples)
-                 rms_val = torch.sqrt(torch.mean(rms_input ** 2, dim=1, keepdim=True) + 1e-10) # (batch_size, 1, 1)
-                 rms_expanded = rms_val.repeat(1, output.size(1), 1)  # (batch_size, time_steps, 1)
-                 augmented_output = torch.cat((augmented_output, rms_expanded), dim=2)
-            else:
-                logger.info(f"Skipping RMS: Waveform shape {waveforms.shape} not directly usable.")
+            print("Adding RMS energy feature", flush=True)
+            rms = torch.sqrt(torch.mean(waveforms ** 2, dim=1, keepdim=True) + 1e-10)
+            rms_expanded = rms.repeat(1, n_frames_target, 1) # Use n_frames_target
+            augmented_output = torch.cat((augmented_output, rms_expanded), dim=2)
 
-
-        # Add spectral flatness if enabled
         if self.add_sf:
-            print("Adding spectral flatness feature to the output", flush=True)
-            # 'output' here is the SincNet output
-            sf = self.compute_spectral_flatness(output)  # (batch_size, time_steps, 1)
+            print("Adding spectral flatness feature", flush=True)
+            sf = self.compute_spectral_flatness(output)
             augmented_output = torch.cat((augmented_output, sf), dim=2)
 
-        # Proceed with RNN and rest of the model
+        if self.add_formants:
+            print("Adding formants feature", flush=True)
+            formants = self.compute_formants(waveforms, n_frames=n_frames_target) # Pass n_frames_target
+            augmented_output = torch.cat((augmented_output, formants), dim=2)
+
+        if self.add_pitch:
+            print("Adding pitch variation feature", flush=True)
+            pitch_var = self.compute_pitch_variation(waveforms, n_frames=n_frames_target) # Pass n_frames_target
+            augmented_output = torch.cat((augmented_output, pitch_var), dim=2)
+
+        if self.add_mfcc:
+            print("Adding MFCC feature", flush=True)
+            mfcc = self.compute_mfcc(waveforms, n_frames=n_frames_target) # Pass n_frames_target
+            augmented_output = torch.cat((augmented_output, mfcc), dim=2)
+
+        # Normalize features
+        batch_size, seq_len, feat_dim = augmented_output.shape
+        augmented_output = augmented_output.transpose(1, 2)  # (batch, feat_dim, seq_len)
+        augmented_output = self.norm_(augmented_output)  # Normalize
+        augmented_output = augmented_output.transpose(1, 2)  # (batch, seq_len, feat_dim)
+
+        # Feature fusion
+        augmented_output = self.fusion_(augmented_output)
+        augmented_output = torch.relu(augmented_output)
+
+        # RNN
         if return_intermediate is None:
             output = self.rnn_(augmented_output)
         else:
@@ -548,30 +670,25 @@ class PyanNetEnhanced(Model):
                 intermediate = augmented_output
                 output = self.rnn_(augmented_output)
             else:
-                # This part of your original code for return_intermediate might need adjustment
-                # if rnn_ expects a boolean for return_intermediate.
-                # Assuming rnn_ can handle an integer and returns a list/tuple of intermediates.
-                temp_return_intermediate_flag = True # Or however your RNN handles this
-                output, rnn_intermediates = self.rnn_(augmented_output, return_intermediate=temp_return_intermediate_flag)
-                if isinstance(rnn_intermediates, (list, tuple)) and len(rnn_intermediates) > (return_intermediate -1) and rnn_intermediates[return_intermediate -1] is not None :
-                    intermediate = rnn_intermediates[return_intermediate -1] # Adjust index if necessary
-                else: 
-                    intermediate = None # Or handle error
+                output, intermediate = self.rnn_(augmented_output, return_intermediate=True)
+                intermediate = intermediate[return_intermediate - 1]
 
+        # Attention
+        output = output.transpose(0, 1)  # (seq_len, batch, feat_dim)
+        attn_output, _ = self.attention_(output, output, output)
+        output = self.attn_norm_(attn_output + output)  # Residual connection
+        output = output.transpose(0, 1)  # (batch, seq_len, feat_dim)
+
+        # Feedforward
         output = self.ff_(output)
 
         if self.task.is_representation_learning:
-            embedding_output = self.embedding_(output)
-            if return_intermediate is None:
-                return embedding_output
-            return embedding_output, intermediate # Ensure intermediate is defined
+            output = self.embedding_(output)
+            return output if return_intermediate is None else (output, intermediate)
 
         output = self.linear_(output)
         output = self.activation_(output)
-
-        if return_intermediate is None:
-            return output
-        return output, intermediate # Ensure intermediate is defined
+        return output if return_intermediate is None else (output, intermediate)
 
     @property
     def dimension(self):
@@ -582,7 +699,7 @@ class PyanNetEnhanced(Model):
     def intermediate_dimension(self, layer):
         if layer == 0:
             return self.sincnet_.dimension
-        return self.rnn_.intermediate_dimension(layer-1)
+        return self.rnn_.intermediate_dimension(layer - 1)
 
 
 class SincTDNN(Model):
