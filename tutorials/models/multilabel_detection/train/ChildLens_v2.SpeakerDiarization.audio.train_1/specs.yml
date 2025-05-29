@@ -1,0 +1,11 @@
+X:
+  dimension: 1
+database:
+  classes:
+  - ChildLens_v2
+task: frame-wise multi-label classification
+y:
+  classes:
+  - KCHI
+  - CDS
+  - OHS
