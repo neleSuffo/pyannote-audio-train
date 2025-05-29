@@ -535,7 +535,7 @@ class PyanNetEnhanced(Model):
                     lpc_order = max(1, len(waveform_1d) -1) # Adjust lpc_order if too large
 
                 if len(waveform_1d) == 0 or lpc_order <= 0: # Skip if waveform is too short or lpc_order is invalid
-                    freqs = np.zeros(2)
+                    freqs = np.zeros(2, dtype=np.float32)
                 else:
                     lpc_coeffs = librosa.lpc(waveform_1d, order=lpc_order)
                     roots = np.roots(lpc_coeffs)
@@ -547,16 +547,16 @@ class PyanNetEnhanced(Model):
                     valid_freqs = np.sort(valid_freqs)
                     
                     if len(valid_freqs) >= 2:
-                        freqs = valid_freqs[:2]  # Take the first two
+                        freqs = valid_freqs[:2].astype(np.float32)  # Take the first two
                     elif len(valid_freqs) == 1:
-                        freqs = np.array([valid_freqs[0], 0.0]) # Pad if only one formant
+                        freqs = np.array([valid_freqs[0], 0.0], dtype=np.float32) # Pad if only one formant
                     else:
-                        freqs = np.zeros(2) # Default if no valid formants found
+                        freqs = np.zeros(2, dtype=np.float32) # Default if no valid formants found
             except Exception as e:
                 # logger.warning(f"Error computing formants: {e}. Returning zeros.") # Optional: log the error
-                freqs = np.zeros(2)
+                freqs = np.zeros(2, dtype=np.float32)
             formants_list.append(freqs)
-        formants_tensor = torch.tensor(formants_list, dtype=torch.float32, device=waveforms.device)
+        formants_tensor = torch.tensor(np.array(formants_list), dtype=torch.float32, device=waveforms.device)
         # formants_tensor shape: (batch_size, 2)
         return formants_tensor.unsqueeze(1).repeat(1, n_frames, 1) # Repeat across n_frames
 
@@ -570,11 +570,12 @@ class PyanNetEnhanced(Model):
 
                 pitch_track, voiced_flag, voiced_probs = librosa.pyin(waveform_1d, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'), sr=sample_rate)
                 valid_pitches = pitch_track[~np.isnan(pitch_track) & (pitch_track > 0)]
-                pitch_var_val = np.var(valid_pitches) if len(valid_pitches) > 1 else 0.0
+                pitch_var_val = np.var(valid_pitches).astype(np.float32) if len(valid_pitches) > 1 else np.float32(0.0)
             except Exception as e:
                 # logger.warning(f"Error computing pitch variation: {e}. Returning zero.") # Optional: log the error
-                pitch_var_val = 0.0
+                pitch_var_val = np.float32(0.0)
             pitches_list.append(pitch_var_val)
+        # For a list of scalars, torch.tensor is efficient.
         pitch_var_tensor = torch.tensor(pitches_list, dtype=torch.float32, device=waveforms.device)
         # pitch_var_tensor shape: (batch_size)
         return pitch_var_tensor.unsqueeze(1).unsqueeze(2).repeat(1, n_frames, 1) # Repeat across n_frames
@@ -588,15 +589,15 @@ class PyanNetEnhanced(Model):
                 if waveform_1d.size == 0: raise ValueError("Empty waveform")
 
                 mfcc_features = librosa.feature.mfcc(y=waveform_1d, sr=sample_rate, n_mfcc=n_mfcc)
-                mfcc_mean = np.mean(mfcc_features, axis=1)  # Average over time frames of MFCC
+                mfcc_mean = np.mean(mfcc_features, axis=1).astype(np.float32)  # Average over time frames of MFCC
             except Exception as e:
                 # logger.warning(f"Error computing MFCCs: {e}. Returning zeros.") # Optional: log the error
-                mfcc_mean = np.zeros(n_mfcc)
+                mfcc_mean = np.zeros(n_mfcc, dtype=np.float32)
             mfccs_list.append(mfcc_mean)
-        mfccs_tensor = torch.tensor(mfccs_list, dtype=torch.float32, device=waveforms.device)
+        mfccs_tensor = torch.tensor(np.array(mfccs_list), dtype=torch.float32, device=waveforms.device)
         # mfccs_tensor shape: (batch_size, n_mfcc)
         return mfccs_tensor.unsqueeze(1).repeat(1, n_frames, 1) # Repeat across n_frames
-
+    
     def forward(self, waveforms, return_intermediate=None):
         """Forward pass
 
@@ -627,28 +628,23 @@ class PyanNetEnhanced(Model):
         augmented_output = output
 
         if self.add_rms:
-            print("Adding RMS energy feature", flush=True)
             rms = torch.sqrt(torch.mean(waveforms ** 2, dim=1, keepdim=True) + 1e-10)
             rms_expanded = rms.repeat(1, n_frames_target, 1) # Use n_frames_target
             augmented_output = torch.cat((augmented_output, rms_expanded), dim=2)
 
         if self.add_sf:
-            print("Adding spectral flatness feature", flush=True)
             sf = self.compute_spectral_flatness(output)
             augmented_output = torch.cat((augmented_output, sf), dim=2)
 
         if self.add_formants:
-            print("Adding formants feature", flush=True)
             formants = self.compute_formants(waveforms, n_frames=n_frames_target) # Pass n_frames_target
             augmented_output = torch.cat((augmented_output, formants), dim=2)
 
         if self.add_pitch:
-            print("Adding pitch variation feature", flush=True)
             pitch_var = self.compute_pitch_variation(waveforms, n_frames=n_frames_target) # Pass n_frames_target
             augmented_output = torch.cat((augmented_output, pitch_var), dim=2)
 
         if self.add_mfcc:
-            print("Adding MFCC feature", flush=True)
             mfcc = self.compute_mfcc(waveforms, n_frames=n_frames_target) # Pass n_frames_target
             augmented_output = torch.cat((augmented_output, mfcc), dim=2)
 
