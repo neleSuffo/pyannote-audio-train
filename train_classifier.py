@@ -16,8 +16,12 @@ import joblib
 AUDIO_DIR = "/home/nele_pauline_suffo/ProcessedData/childlens_audio"
 # --- Training Mode Configuration ---
 TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/complete.rttm"
-MODEL_SAVE_PATH = 'speech_classifier_pipeline.pkl'
-IMPUTER_SAVE_PATH = 'speech_feature_imputer.pkl'
+MODEL_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/speech_classifier_pipeline.pkl'
+IMPUTER_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/speech_feature_imputer.pkl'
+
+# --- Paths for saving internal train/test splits from training mode ---
+TRAIN_SPLIT_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train_split_internal.rttm'
+TEST_SPLIT_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test_split_internal_for_eval.rttm'
 
 # --- Evaluate Mode Configuration ---
 EVAL_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.rttm" # RTTM to evaluate model on
@@ -144,11 +148,14 @@ def prepare_classifier_data(rttm_df, audio_base_path):
     return np.array(feature_vectors), np.array(true_labels), processed_segments_info
 
 # --- 5. Training the Speech Classifier ---
-def train_speech_classifier(X, y):
+def train_speech_classifier(X, y, processed_segments_info, train_rttm_save_path, test_rttm_save_path):
     """
-    Trains a classifier for KCHI vs. OHS vs. CDS.
+    Trains a classifier.
     X: Feature vectors.
-    y: True labels ('KCHI', 'OHS', 'CDS').
+    y: True labels.
+    processed_segments_info: List of dicts containing original segment info for RTTM saving.
+    train_rttm_save_path: Path to save the RTTM of the internal training split.
+    test_rttm_save_path: Path to save the RTTM of the internal test split.
     """
     if X is None or y is None or len(X) == 0 or len(y) == 0:
         print("Cannot train classifier: No data provided.")
@@ -162,31 +169,41 @@ def train_speech_classifier(X, y):
         print(f"Samples: {X_imputed.shape[0]}, Unique classes: {np.unique(y)}")
         return None, None
 
-    # Stratify by y to ensure proportional representation of classes in train/test splits
-    # Test size can be adjusted, e.g., 0.2 for 20% test data
+    # Create an array of indices to split along with the data
+    indices = np.arange(X_imputed.shape[0])
+    
     try:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_imputed, y, test_size=0.25, random_state=42, stratify=y
+        X_train, X_test, y_train, y_test, indices_train, indices_test = train_test_split(
+            X_imputed, y, indices, test_size=0.25, random_state=42, stratify=y
         )
     except ValueError as e:
         print(f"Error during train_test_split (likely due to insufficient samples for a class for stratification): {e}")
         print(f"Class distribution in y: {pd.Series(y).value_counts().to_dict()}")
-        # Fallback: don't stratify if it fails, though this is not ideal
-        if len(np.unique(y)) == 1 and len(y) > 1: # If only one class, can't stratify or split meaningfully for classification
-             print("Only one class present in the data. Cannot perform train/test split for classification evaluation.")
-             # Optionally, train on all data if only one class, but evaluation will be trivial
+        if len(np.unique(y)) == 1 and len(y) > 1:
+             print("Only one class present. Training on all data, no test split for evaluation here.")
              X_train, X_test, y_train, y_test = X_imputed, np.array([]), y, np.array([])
-        elif len(y) > 1 : # if more than one sample, try without stratify
+             indices_train, indices_test = indices, np.array([]) # All data for train, none for test
+        elif len(y) > 1 :
             print("Attempting train_test_split without stratification.")
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_imputed, y, test_size=0.25, random_state=42
+            X_train, X_test, y_train, y_test, indices_train, indices_test = train_test_split(
+                X_imputed, y, indices, test_size=0.25, random_state=42
             )
-        else: # Not enough data to split
+        else:
             print("Not enough data to perform train/test split.")
             return None, None
-
-
     
+    # Save the RTTM files for the splits
+    if processed_segments_info:
+        train_segments_to_save = [processed_segments_info[i] for i in indices_train]
+        test_segments_to_save = [processed_segments_info[i] for i in indices_test]
+        
+        if train_segments_to_save:
+            write_rttm_from_segments(train_segments_to_save, train_rttm_save_path)
+            print(f"Internal training split RTTM saved to: {train_rttm_save_path}")
+        if test_segments_to_save:
+            write_rttm_from_segments(test_segments_to_save, test_rttm_save_path)
+            print(f"Internal test split RTTM saved to: {test_rttm_save_path}")
+
     print(f"Training speech classifier with {len(X_train)} samples, testing with {len(X_test)} samples.")
     print(f"Training labels distribution: {pd.Series(y_train).value_counts().to_dict()}")
     if len(y_test) > 0:
@@ -206,7 +223,7 @@ def train_speech_classifier(X, y):
     else:
         print("\nNo test data to evaluate performance.")
     
-    return pipeline, imputer 
+    return pipeline, imputer
 
 # --- 6. Apply Full Pipeline (for apply mode) ---
 def apply_full_pipeline(rttm_df, audio_base_path, trained_speech_model, feature_imputer):
@@ -268,6 +285,31 @@ def read_rttm_file(file_path):
         print(f"Error: RTTM file not found at {file_path}")
         return None
 
+def write_rttm_from_segments(segments_list, file_path):
+    """
+    Writes a list of segment dictionaries to an RTTM file.
+    Each segment dictionary should conform to the RTTM_COLUMNS structure.
+    """
+    try:
+        with open(file_path, 'w') as f:
+            for seg in segments_list:
+                # Ensure all RTTM fields are present, providing defaults for NA fields if missing
+                line_parts = [
+                    seg.get('type', 'SPEAKER'),
+                    seg.get('file_id', 'UnknownFileID'),
+                    str(seg.get('channel', 1)),
+                    f"{seg.get('start_time', 0.0):.3f}",
+                    f"{seg.get('duration', 0.0):.3f}",
+                    seg.get('NA1', '<NA>'),
+                    seg.get('NA2', '<NA>'),
+                    seg.get('diarization_label', 'UnknownLabel'),
+                    seg.get('NA3', '<NA>'),
+                    seg.get('NA4', '<NA>') # Ensure 10 fields
+                ]
+                f.write(" ".join(line_parts) + "\n")
+    except Exception as e:
+        print(f"Error writing RTTM file {file_path}: {e}")
+        
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train, evaluate, or apply a speech classifier.")
     parser.add_argument("--mode", choices=['train', 'evaluate', 'apply'], required=True, help="Mode of operation: 'train', 'evaluate', or 'apply'.")
@@ -301,9 +343,11 @@ if __name__ == "__main__":
         trained_model = None
         trained_imputer = None 
 
-        if X_features is not None and y_labels is not None and len(X_features) > 0 :
+        if X_features is not None and y_labels is not None and len(X_features) > 0 and processed_segments is not None:
             print(f"\n--- Training Speech Classifier ({', '.join(EXPECTED_LABELS)}) ---")
-            trained_model, trained_imputer = train_speech_classifier(X_features, y_labels)
+            trained_model, trained_imputer = train_speech_classifier(
+                X_features, y_labels, processed_segments, TRAIN_SPLIT_SAVE_PATH, TEST_SPLIT_SAVE_PATH
+            )
             if trained_model and trained_imputer:
                 print("\nClassifier training complete.")
                 joblib.dump(trained_model, MODEL_SAVE_PATH)
@@ -328,7 +372,7 @@ if __name__ == "__main__":
             print("No RTTM data available for evaluation. Exiting.")
             exit()
 
-        rttm_df_eval = parse_rttm(rttm_content_eval)
+        rttm_df_eval = parse_rttm(rttm_content_eval, labels_to_consider=EXPECTED_LABELS)
         if rttm_df_eval.empty:
             print("Parsed RTTM for evaluation is empty. No data to process. Check RTTM content and EXPECTED_LABELS.")
             exit()
