@@ -269,8 +269,11 @@ def read_rttm_file(file_path):
         return None
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train or apply a speech classifier.")
-    parser.add_argument("--mode", choices=['train', 'evaluate'], help="Mode of operation: 'train' or 'evaluate'")
+    parser = argparse.ArgumentParser(description="Train, evaluate, or apply a speech classifier.")
+    parser.add_argument("--mode", choices=['train', 'evaluate', 'apply'], required=True, help="Mode of operation: 'train', 'evaluate', or 'apply'.")
+    # Arguments for 'apply' mode
+    parser.add_argument("--input_rttm_apply", type=str, help="Path to the RTTM file for 'apply' mode.")
+    parser.add_argument("--output_csv_apply", type=str, help="Path to save the CSV output for 'apply' mode (default: applied_classifications.csv).")
     args = parser.parse_args()
 
     if args.mode == 'train':
