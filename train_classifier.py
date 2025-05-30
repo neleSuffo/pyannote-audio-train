@@ -9,15 +9,23 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report
 import parselmouth # For Praat's pitch extraction
 from sklearn.impute import SimpleImputer # For handling NaNs
-import soundfile as sf # For dummy audio creation
+import argparse
+import joblib
 
 # --- Configuration ---
 AUDIO_DIR = "/home/nele_pauline_suffo/ProcessedData/childlens_audio"
-TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train.rttm"
+# --- Training Mode Configuration ---
+TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/complete.rttm"
+MODEL_SAVE_PATH = 'speech_classifier_pipeline.pkl'
+IMPUTER_SAVE_PATH = 'speech_feature_imputer.pkl'
+
+# --- Apply Mode Configuration ---
+APPLY_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.rttm" # RTTM to apply model on
+OUTPUT_CSV_PATH = "/home/nele_pauline_suffo/projects/pyannote-audio-train/final_classifications.csv"
 
 RTTM_COLUMNS = ['type', 'file_id', 'channel', 'start_time', 'duration', 
                 'NA1', 'NA2', 'diarization_label', 'NA3', 'NA4']
-EXPECTED_LABELS = ["KCHI", "OHS", "CDS"] # Labels to be learned by the classifier
+EXPECTED_LABELS = ["OHS", "CDS"] # Labels to be learned by the classifier
 
 # --- 1. Parse RTTM ---
 def parse_rttm(rttm_content):
@@ -122,9 +130,6 @@ def prepare_classifier_data(rttm_df, audio_base_path):
 
             features = extract_prosodic_features(y, sr)
             
-            # We will handle NaNs with an imputer before training
-            # but we should only include segments for which we could extract some features
-            # and have a valid label.
             if features is not None: # extract_prosodic_features always returns a list
                 feature_vectors.append(features)
                 true_labels.append(row['diarization_label'])
@@ -203,56 +208,57 @@ def train_speech_classifier(X, y):
     
     return pipeline, imputer 
 
-# --- (apply_full_pipeline function is commented out as its original purpose is superseded) ---
-# If you need to apply the trained 3-class model to new data later,
-# you would write a new function similar to this, but it would take
-# the 3-class model and apply it.
-"""
+# --- 6. Apply Full Pipeline (for apply mode) ---
 def apply_full_pipeline(rttm_df, audio_base_path, trained_speech_model, feature_imputer):
     final_classifications = []
     if trained_speech_model is None or feature_imputer is None:
         print("Trained model or imputer not available. Cannot perform full classification.")
-        # Fallback or error handling
         for index, row in rttm_df.iterrows():
             final_classifications.append({
                 **row.to_dict(),
-                'final_classification': 'MODEL_MISSING'
+                'predicted_speech_class': 'MODEL_MISSING'
             })
         return pd.DataFrame(final_classifications)
 
+    print(f"\nApplying model to {len(rttm_df)} segments...")
     for index, row in rttm_df.iterrows():
-        # Assuming rttm_df here is for new data that needs classification
-        # and might only have basic diarization labels (e.g. SPEAKER_01, SPEAKER_02)
-        # or KCHI/FEM/MAL which then need to be mapped by this model.
-        # For this example, let's assume we are re-classifying based on features.
+        file_name = row['file_id']
+        if not file_name.lower().endswith('.wav'):
+            file_name += ".wav"
+        segment_audio_path = os.path.join(audio_base_path, file_name)
         
-        segment_audio_path = os.path.join(audio_base_path, row['file_id'] + ".wav")
-        classification = "ERROR_UNKNOWN"
+        classification_result = "ERROR_UNKNOWN" # Default status
+
         if not os.path.exists(segment_audio_path):
-            classification = "ERROR_NO_AUDIO"
+            classification_result = "ERROR_NO_AUDIO"
+            print(f"Audio file not found: {segment_audio_path}. Skipping segment.")
         else:
             y, sr = load_audio_segment(segment_audio_path, row['start_time'], row['duration'])
             if y is None:
-                classification = "ERROR_LOAD_AUDIO"
+                classification_result = "ERROR_LOAD_AUDIO"
             else:
                 features = extract_prosodic_features(y, sr)
                 features_reshaped = np.array(features).reshape(1, -1)
-                features_imputed = feature_imputer.transform(features_reshaped)
                 
-                if any(np.isnan(features_imputed.flatten())):
-                    classification = "ERROR_FEATURE_IMPUTATION_FAILED"
-                else:
-                    classification = trained_speech_model.predict(features_imputed)[0]
+                try:
+                    features_imputed = feature_imputer.transform(features_reshaped)
+                    if np.isnan(features_imputed).any(): # Check for NaNs after imputation
+                        print(f"Warning: NaNs found in features after imputation for {row['file_id']} at {row['start_time']}. This might indicate issues with the segment or imputer training.")
+                        classification_result = "ERROR_NAN_FEATURES_POST_IMPUTE"
+                    else:
+                        classification_result = trained_speech_model.predict(features_imputed)[0]
+                except Exception as e:
+                    print(f"Error during feature transformation or prediction for {row['file_id']} at {row['start_time']}: {e}")
+                    classification_result = "ERROR_PREDICTION"
         
         final_classifications.append({
             'file_id': row['file_id'],
             'start_time': row['start_time'],
             'duration': row['duration'],
-            'original_diarization_label': row.get('diarization_label', 'NA'), # if present
-            'predicted_speech_class': classification
+            'original_diarization_label': row.get('diarization_label', 'NA'), 
+            'predicted_speech_class': classification_result
         })
     return pd.DataFrame(final_classifications)
-"""
 
 def read_rttm_file(file_path):
     try:
@@ -263,47 +269,97 @@ def read_rttm_file(file_path):
         return None
 
 if __name__ == "__main__":
-    rttm_content = None
-    if os.path.exists(TRAIN_RTTM_FILE_PATH):
-        print(f"Loading RTTM from: {TRAIN_RTTM_FILE_PATH}")
-        rttm_content = read_rttm_file(TRAIN_RTTM_FILE_PATH)
-    else:
-        print(f"Warning: {TRAIN_RTTM_FILE_PATH} not found.")
+    parser = argparse.ArgumentParser(description="Train or apply a speech classifier.")
+    parser.add_argument("--mode", choices=['train', 'apply'], help="Mode of operation: 'train' or 'apply'")
+    args = parser.parse_args()
 
-    if rttm_content is None:
-        print("No RTTM data available. Exiting.")
-        exit()
-
-    rttm_df = parse_rttm(rttm_content)
-    if rttm_df.empty:
-        print("Parsed RTTM is empty. No data to process. Check RTTM content and EXPECTED_LABELS.")
-        exit()
-    
-    print(f"\nParsed RTTM data ({len(rttm_df)} segments)")
-
-    # 1. Prepare data for classifier training
-    X_features, y_labels, processed_segments = prepare_classifier_data(rttm_df, AUDIO_DIR)
-
-    trained_model = None
-    trained_imputer = None 
-
-    if X_features is not None and y_labels is not None and len(X_features) > 0 :
-        # 2. Train the speech classifier
-        print(f"\n--- Training Speech Classifier (KCHI, OHS, CDS) ---")
-        trained_model, trained_imputer = train_speech_classifier(X_features, y_labels)
-        if trained_model:
-            print("\nClassifier training complete.")
-            # You can save the trained_model and trained_imputer here using joblib or pickle
-            import joblib
-            joblib.dump(trained_model, 'speech_classifier_pipeline.pkl')
-            joblib.dump(trained_imputer, 'speech_feature_imputer.pkl')
-            print("Trained model and imputer saved.")
+    if args.mode == 'train':
+        print("--- Running in TRAIN mode ---")
+        rttm_content = None
+        if os.path.exists(TRAIN_RTTM_FILE_PATH):
+            print(f"Loading RTTM from: {TRAIN_RTTM_FILE_PATH}")
+            rttm_content = read_rttm_file(TRAIN_RTTM_FILE_PATH)
         else:
-            print("\nClassifier training failed or was skipped.")
-    else:
-        print("\nSkipping classifier training due to lack of data or errors during preparation.")
+            print(f"Error: Training RTTM file not found at {TRAIN_RTTM_FILE_PATH}")
 
-    # The `apply_full_pipeline` logic would go here if you wanted to apply the
-    # trained model to new/unlabeled data. For now, the script focuses on training
-    # and evaluating the 3-class classifier from your pre-labeled RTTM.
-    print("\n--- Script Finished ---")
+        if rttm_content is None:
+            print("No RTTM data available for training. Exiting.")
+            exit()
+
+        rttm_df = parse_rttm(rttm_content)
+        if rttm_df.empty:
+            print("Parsed RTTM is empty for training. No data to process. Check RTTM content and EXPECTED_LABELS.")
+            exit()
+        
+        print(f"\nParsed RTTM data for training ({len(rttm_df)} segments with expected labels)")
+
+        X_features, y_labels, processed_segments = prepare_classifier_data(rttm_df, AUDIO_DIR)
+
+        trained_model = None
+        trained_imputer = None 
+
+        if X_features is not None and y_labels is not None and len(X_features) > 0 :
+            print(f"\n--- Training Speech Classifier ({', '.join(EXPECTED_LABELS)}) ---")
+            trained_model, trained_imputer = train_speech_classifier(X_features, y_labels)
+            if trained_model and trained_imputer:
+                print("\nClassifier training complete.")
+                joblib.dump(trained_model, MODEL_SAVE_PATH)
+                joblib.dump(trained_imputer, IMPUTER_SAVE_PATH)
+                print(f"Trained model saved to {MODEL_SAVE_PATH}")
+                print(f"Trained imputer saved to {IMPUTER_SAVE_PATH}")
+            else:
+                print("\nClassifier training failed or was skipped.")
+        else:
+            print("\nSkipping classifier training due to lack of data or errors during preparation.")
+
+    elif args.mode == 'apply':
+        print("--- Running in APPLY mode ---")
+        rttm_content_apply = None
+        if os.path.exists(APPLY_RTTM_FILE_PATH):
+            print(f"Loading RTTM for applying from: {APPLY_RTTM_FILE_PATH}")
+            rttm_content_apply = read_rttm_file(APPLY_RTTM_FILE_PATH)
+        else:
+            print(f"Error: RTTM file for applying not found at {APPLY_RTTM_FILE_PATH}")
+        
+        if rttm_content_apply is None:
+            print("No RTTM data available for applying. Exiting.")
+            exit()
+
+        rttm_df_apply = parse_rttm(rttm_content_apply)
+        if rttm_df_apply.empty:
+            print("Parsed RTTM for applying is empty. No data to process. Check RTTM content and EXPECTED_LABELS.")
+            exit()
+        
+        print(f"\nParsed RTTM data for applying ({len(rttm_df_apply)} segments with expected labels)")
+        
+        # Load trained model and imputer
+        loaded_model = None
+        loaded_imputer = None
+        if os.path.exists(MODEL_SAVE_PATH):
+            loaded_model = joblib.load(MODEL_SAVE_PATH)
+            print(f"Loaded trained model from {MODEL_SAVE_PATH}")
+        else:
+            print(f"Error: Trained model file not found at {MODEL_SAVE_PATH}")
+        
+        if os.path.exists(IMPUTER_SAVE_PATH):
+            loaded_imputer = joblib.load(IMPUTER_SAVE_PATH)
+            print(f"Loaded feature imputer from {IMPUTER_SAVE_PATH}")
+        else:
+            print(f"Error: Feature imputer file not found at {IMPUTER_SAVE_PATH}")
+
+        if loaded_model is None or loaded_imputer is None:
+            print("Cannot proceed with applying model due to missing model or imputer. Exiting.")
+            exit()
+
+        final_df = apply_full_pipeline(rttm_df_apply, AUDIO_DIR, loaded_model, loaded_imputer)
+        
+        try:
+            final_df.to_csv(OUTPUT_CSV_PATH, index=False)
+            print(f"Final classifications saved to {OUTPUT_CSV_PATH}")
+        except Exception as e:
+            print(f"Error saving classifications to CSV: {e}")
+            print("Attempting to print DataFrame to console:")
+            print(final_df.head())
+
+    else:
+        print(f"Unknown mode: {args.mode}. Choose 'train' or 'apply'.")
