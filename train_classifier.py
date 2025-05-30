@@ -19,12 +19,7 @@ TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/
 MODEL_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/speech_classifier_pipeline.pkl'
 IMPUTER_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/speech_feature_imputer.pkl'
 
-# --- Paths for saving internal train/test splits from training mode ---
-TRAIN_SPLIT_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train_split_internal.rttm'
-TEST_SPLIT_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test_split_internal_for_eval.rttm'
-
 # --- Evaluate Mode Configuration ---
-EVAL_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.rttm" # RTTM to evaluate model on
 OUTPUT_CSV_PATH = "/home/nele_pauline_suffo/projects/pyannote-audio-train/final_classifications.csv"
 
 RTTM_COLUMNS = ['type', 'file_id', 'channel', 'start_time', 'duration', 
@@ -311,8 +306,8 @@ def write_rttm_from_segments(segments_list, file_path):
         print(f"Error writing RTTM file {file_path}: {e}")
         
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train, evaluate, or apply a speech classifier.")
-    parser.add_argument("--mode", choices=['train', 'evaluate', 'apply'], required=True, help="Mode of operation: 'train', 'evaluate', or 'apply'.")
+    parser = argparse.ArgumentParser(description="Train, or apply a speech classifier.")
+    parser.add_argument("--mode", choices=['train', 'apply'], required=True, help="Mode of operation: 'train', 'evaluate', or 'apply'.")
     # Arguments for 'apply' mode
     parser.add_argument("--input_rttm_apply", type=str, help="Path to the RTTM file for 'apply' mode.")
     parser.add_argument("--output_csv_apply", type=str, help="Path to save the CSV output for 'apply' mode (default: applied_classifications.csv).")
@@ -359,73 +354,38 @@ if __name__ == "__main__":
         else:
             print("\nSkipping classifier training due to lack of data or errors during preparation.")
 
-    elif args.mode == 'evaluate':
-        print("--- Running in EVALUATE mode ---")
-        rttm_content_eval = None
-        if os.path.exists(EVAL_RTTM_FILE_PATH):
-            print(f"Loading RTTM for evaluation from: {EVAL_RTTM_FILE_PATH}")
-            rttm_content_eval = read_rttm_file(EVAL_RTTM_FILE_PATH)
-        else:
-            print(f"Error: RTTM file for evaluation not found at {EVAL_RTTM_FILE_PATH}")
-        
-        if rttm_content_eval is None:
-            print("No RTTM data available for evaluation. Exiting.")
+    elif args.mode == 'apply':
+        print("--- Running in APPLY mode ---")
+        if not args.input_rttm_apply or not os.path.exists(args.input_rttm_apply):
+            print(f"Error: Input RTTM file for apply mode not found at {args.input_rttm_apply}")
             exit()
 
-        rttm_df_eval = parse_rttm(rttm_content_eval, labels_to_consider=EXPECTED_LABELS)
-        if rttm_df_eval.empty:
-            print("Parsed RTTM for evaluation is empty. No data to process. Check RTTM content and EXPECTED_LABELS.")
-            exit()
-        
-        print(f"\nParsed RTTM data for evaluation ({len(rttm_df_eval)} segments with expected labels)")
-        
-        # Load trained model and imputer
-        loaded_model = None
-        loaded_imputer = None
-        if os.path.exists(MODEL_SAVE_PATH):
-            loaded_model = joblib.load(MODEL_SAVE_PATH)
-            print(f"Loaded trained model from {MODEL_SAVE_PATH}")
-        else:
-            print(f"Error: Trained model file not found at {MODEL_SAVE_PATH}")
-        
-        if os.path.exists(IMPUTER_SAVE_PATH):
-            loaded_imputer = joblib.load(IMPUTER_SAVE_PATH)
-            print(f"Loaded feature imputer from {IMPUTER_SAVE_PATH}")
-        else:
-            print(f"Error: Feature imputer file not found at {IMPUTER_SAVE_PATH}")
-
-        if loaded_model is None or loaded_imputer is None:
-            print("Cannot proceed with evaluation due to missing model or imputer. Exiting.")
+        rttm_content = read_rttm_file(args.input_rttm_apply)
+        if rttm_content is None:
+            print("No RTTM data available for applying the model. Exiting.")
             exit()
 
-        eval_df = apply_full_pipeline(rttm_df_eval, AUDIO_DIR, loaded_model, loaded_imputer)
-        
-        if not eval_df.empty:
-            # Ensure 'original_diarization_label' and 'predicted_speech_class' columns exist
-            if 'original_diarization_label' in eval_df.columns and 'predicted_speech_class' in eval_df.columns:
-                y_true = eval_df['original_diarization_label']
-                y_pred = eval_df['predicted_speech_class']
-                
-                print("\n--- Evaluation Metrics ---")
-                valid_indices = y_true.isin(EXPECTED_LABELS)
-                y_true_filtered = y_true[valid_indices]
-                y_pred_filtered = y_pred[valid_indices]
+        rttm_df = parse_rttm(rttm_content)
+        if rttm_df.empty:
+            print("Parsed RTTM is empty for applying the model. No data to process. Check RTTM content and EXPECTED_LABELS.")
+            exit()
 
-                if not y_true_filtered.empty:
-                    print(classification_report(y_true_filtered, y_pred_filtered, labels=EXPECTED_LABELS, zero_division=0))
-                else:
-                    print("No valid true labels found matching EXPECTED_LABELS for metric calculation.")
+        print(f"\nParsed RTTM data for applying the model ({len(rttm_df)} segments with expected labels)")
 
-            else:
-                print("Warning: 'original_diarization_label' or 'predicted_speech_class' column missing in the output DataFrame. Cannot calculate metrics.")
-
-            try:
-                eval_df.to_csv(OUTPUT_CSV_PATH, index=False)
-                print(f"\nEvaluation results saved to {OUTPUT_CSV_PATH}")
-            except Exception as e:
-                print(f"Error saving evaluation results to CSV: {e}")
+        # Load the trained model and imputer
+        if os.path.exists(MODEL_SAVE_PATH) and os.path.exists(IMPUTER_SAVE_PATH):
+            trained_model = joblib.load(MODEL_SAVE_PATH)
+            trained_imputer = joblib.load(IMPUTER_SAVE_PATH)
+            print("Loaded trained model and imputer successfully.")
         else:
-            print("Evaluation resulted in an empty DataFrame. No results to save or analyze.")
+            print("Trained model or imputer not found. Cannot apply classification.")
+            exit()
 
-    else:
-        print(f"Unknown mode: {args.mode}. Choose 'train' or 'evaluate'.")
+        final_classifications_df = apply_full_pipeline(rttm_df, AUDIO_DIR, trained_model, trained_imputer)
+
+        if final_classifications_df is not None:
+            output_csv_path = args.output_csv_apply or OUTPUT_CSV_PATH
+            final_classifications_df.to_csv(output_csv_path, index=False)
+            print(f"Final classifications saved to {output_csv_path}")
+        else:
+            print("No classifications were made. Exiting.")
