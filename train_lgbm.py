@@ -109,7 +109,6 @@ def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
     """
     feature_vectors = []
     true_cds_ohs_labels = []
-    processed_segments_info = []
 
     print("\nPreparing data for LGBM classifier training...")
     for index, row in rttm_df.iterrows():
@@ -136,18 +135,17 @@ def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
         if not any(np.isnan(f) for f in features): # More robust NaN check for list of features
             feature_vectors.append(features)
             true_cds_ohs_labels.append(current_label)
-            processed_segments_info.append(row.to_dict())
         else:
             print(f"Segment {row['file_id']} at {row['start_time']}s has NaN features. Skipping.")
 
     if not feature_vectors:
         print("No valid feature vectors collected for CDS/OHS training. Aborting.")
-        return None, None, None
+        return None, None
     
-    return np.array(feature_vectors), np.array(true_cds_ohs_labels), processed_segments_info
+    return np.array(feature_vectors), np.array(true_cds_ohs_labels)
 
 # --- 5. Training the Speech Classifier ---
-def train_cds_ohs_classifier(X, y):
+def train_lgbm_classifier(X, y):
     """
     Trains a LightGBM classifier for CDS vs. OHS.
     X: Feature vectors.
@@ -314,14 +312,14 @@ if __name__ == "__main__":
         
         print(f"\nParsed RTTM data for training ({len(rttm_df)} segments with expected labels)")
 
-        X_features, y_labels, processed_segments = prepare_lgbm_classifier_data(rttm_df, AUDIO_DIR)
+        X_features, y_labels = prepare_lgbm_classifier_data(rttm_df, AUDIO_DIR)
 
         trained_model = None
         trained_imputer = None 
 
-        if X_cds_ohs_features is not None and y_cds_ohs_labels is not None and len(X_cds_ohs_features) > 0:
+        if X_features is not None and y_labels is not None and len(X_features) > 0:
             # 2. Train the CDS/OHS classifier with LightGBM
-            trained_model, trained_imputer = train_cds_ohs_classifier(X_cds_ohs_features, y_cds_ohs_labels)
+            trained_model, trained_imputer = train_lgbm_classifier(X_features, y_labels)
         else:
             print("Skipping CDS/OHS model training due to lack of data.")
         
