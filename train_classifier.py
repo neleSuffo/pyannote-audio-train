@@ -107,7 +107,6 @@ def prepare_classifier_data(rttm_df, audio_base_path):
     """
     feature_vectors = []
     true_labels = []
-    processed_segments_info = [] 
 
     print("\nPreparing data for speech classifier training...")
     for index, row in rttm_df.iterrows():
@@ -132,25 +131,21 @@ def prepare_classifier_data(rttm_df, audio_base_path):
             if features is not None: # extract_prosodic_features always returns a list
                 feature_vectors.append(features)
                 true_labels.append(row['diarization_label'])
-                processed_segments_info.append(row.to_dict())
             else: # Should not happen if extract_prosodic_features is robust
                 print(f"Feature extraction failed for segment {row['file_id']} {row['start_time']}. Skipping.")
 
     if not feature_vectors:
          print("No valid feature vectors collected for training. Aborting.")
-         return None, None, None
+         return None, None # Adjusted return
          
-    return np.array(feature_vectors), np.array(true_labels), processed_segments_info
+    return np.array(feature_vectors), np.array(true_labels) # Adjusted return
 
 # --- 5. Training the Speech Classifier ---
-def train_speech_classifier(X, y, processed_segments_info, train_rttm_save_path, test_rttm_save_path):
+def train_speech_classifier(X, y):
     """
     Trains a classifier.
     X: Feature vectors.
     y: True labels.
-    processed_segments_info: List of dicts containing original segment info for RTTM saving.
-    train_rttm_save_path: Path to save the RTTM of the internal training split.
-    test_rttm_save_path: Path to save the RTTM of the internal test split.
     """
     if X is None or y is None or len(X) == 0 or len(y) == 0:
         print("Cannot train classifier: No data provided.")
@@ -186,18 +181,6 @@ def train_speech_classifier(X, y, processed_segments_info, train_rttm_save_path,
         else:
             print("Not enough data to perform train/test split.")
             return None, None
-    
-    # Save the RTTM files for the splits
-    if processed_segments_info:
-        train_segments_to_save = [processed_segments_info[i] for i in indices_train]
-        test_segments_to_save = [processed_segments_info[i] for i in indices_test]
-        
-        if train_segments_to_save:
-            write_rttm_from_segments(train_segments_to_save, train_rttm_save_path)
-            print(f"Internal training split RTTM saved to: {train_rttm_save_path}")
-        if test_segments_to_save:
-            write_rttm_from_segments(test_segments_to_save, test_rttm_save_path)
-            print(f"Internal test split RTTM saved to: {test_rttm_save_path}")
 
     print(f"Training speech classifier with {len(X_train)} samples, testing with {len(X_test)} samples.")
     print(f"Training labels distribution: {pd.Series(y_train).value_counts().to_dict()}")
@@ -279,31 +262,6 @@ def read_rttm_file(file_path):
     except FileNotFoundError:
         print(f"Error: RTTM file not found at {file_path}")
         return None
-
-def write_rttm_from_segments(segments_list, file_path):
-    """
-    Writes a list of segment dictionaries to an RTTM file.
-    Each segment dictionary should conform to the RTTM_COLUMNS structure.
-    """
-    try:
-        with open(file_path, 'w') as f:
-            for seg in segments_list:
-                # Ensure all RTTM fields are present, providing defaults for NA fields if missing
-                line_parts = [
-                    seg.get('type', 'SPEAKER'),
-                    seg.get('file_id', 'UnknownFileID'),
-                    str(seg.get('channel', 1)),
-                    f"{seg.get('start_time', 0.0):.3f}",
-                    f"{seg.get('duration', 0.0):.3f}",
-                    seg.get('NA1', '<NA>'),
-                    seg.get('NA2', '<NA>'),
-                    seg.get('diarization_label', 'UnknownLabel'),
-                    seg.get('NA3', '<NA>'),
-                    seg.get('NA4', '<NA>') # Ensure 10 fields
-                ]
-                f.write(" ".join(line_parts) + "\n")
-    except Exception as e:
-        print(f"Error writing RTTM file {file_path}: {e}")
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train, or apply a speech classifier.")
@@ -333,15 +291,15 @@ if __name__ == "__main__":
         
         print(f"\nParsed RTTM data for training ({len(rttm_df)} segments with expected labels)")
 
-        X_features, y_labels, processed_segments = prepare_classifier_data(rttm_df, AUDIO_DIR)
+        X_features, y_labels = prepare_classifier_data(rttm_df, AUDIO_DIR) # Adjusted call
 
         trained_model = None
         trained_imputer = None 
 
-        if X_features is not None and y_labels is not None and len(X_features) > 0 and processed_segments is not None:
+        if X_features is not None and y_labels is not None and len(X_features) > 0:
             print(f"\n--- Training Speech Classifier ({', '.join(EXPECTED_LABELS)}) ---")
-            trained_model, trained_imputer = train_speech_classifier(
-                X_features, y_labels, processed_segments, TRAIN_SPLIT_SAVE_PATH, TEST_SPLIT_SAVE_PATH
+            trained_model, trained_imputer = train_speech_classifier( # Adjusted call
+                X_features, y_labels
             )
             if trained_model and trained_imputer:
                 print("\nClassifier training complete.")
