@@ -7,7 +7,7 @@ import pandas as pd
 import lightgbm as lgb
 import parselmouth
 import soundfile as sf
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import RandomizedSearchCV, train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report
@@ -147,7 +147,7 @@ def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
 # --- 5. Training the Speech Classifier ---
 def train_lgbm_classifier(X, y):
     """
-    Trains a LightGBM classifier
+    Trains a LightGBM classifier with hyperparameter tuning.
     X: Feature vectors.
     y: True labels
     """
@@ -155,7 +155,7 @@ def train_lgbm_classifier(X, y):
         print("Cannot train classifier: No data provided.")
         return None, None
 
-    # Impute NaNs that might have slipped through
+    # Impute NaNs
     imputer = SimpleImputer(missing_values=np.nan, strategy='mean')
     X_imputed = imputer.fit_transform(X)
 
@@ -163,41 +163,63 @@ def train_lgbm_classifier(X, y):
         print("Not enough samples or classes to train a meaningful LGBM classifier after imputation.")
         return None, None
 
+    # Split data
     X_train, X_test, y_train, y_test = train_test_split(
         X_imputed, y, test_size=0.20, random_state=42, stratify=y
     )
     
     print(f"Training LGBM classifier with {len(X_train)} samples, testing with {len(X_test)} samples.")
 
-    # LightGBM classifier with basic parameters
+    # Define pipeline
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
-        ('classifier', lgb.LGBMClassifier(
-            random_state=42,
-            learning_rate=0.1,
-            num_leaves=31,
-            max_depth=-1,
-            n_estimators=100,
-            is_unbalance=True,  # Handles imbalanced classes
-            verbose=-1  # Suppress LightGBM warnings
-        ))
+        ('classifier', lgb.LGBMClassifier(random_state=42, verbose=-1))
     ])
 
-    pipeline.fit(X_train, y_train)
+    # Define hyperparameter search space
+    param_distributions = {
+        'classifier__learning_rate': [0.01, 0.05, 0.1, 0.2],
+        'classifier__num_leaves': [15, 31, 50, 100],
+        'classifier__max_depth': [3, 5, 7, -1],  # -1 means no limit
+        'classifier__n_estimators': [50, 100, 200, 300],
+        'classifier__min_child_samples': [10, 20, 50, 100],
+        'classifier__subsample': [0.6, 0.8, 1.0],
+        'classifier__colsample_bytree': [0.6, 0.8, 1.0],
+        'classifier__scale_pos_weight': [1.0, 2.0, 3.0]  
+    }
 
-    print("\nLGBM Classifier Performance on Test Set:")
-    y_pred_test = pipeline.predict(X_test)
+    # Perform Randomized Search with cross-validation
+    random_search = RandomizedSearchCV(
+        pipeline,
+        param_distributions=param_distributions,
+        n_iter=50,  # Number of parameter combinations to try
+        scoring='f1_macro',  # Optimize for balanced performance across classes
+        cv=5,  # 5-fold cross-validation
+        random_state=42,
+        n_jobs=24,  
+        verbose=1
+    )
+
+    random_search.fit(X_train, y_train)
+
+    # Print best parameters and score
+    print("\nBest Hyperparameters:", random_search.best_params_)
+    print("Best Cross-Validation F1 Score:", random_search.best_score_)
+
+    # Evaluate on test set
+    print("\nCDS/OHS Classifier Performance on Test Set:")
+    y_pred_test = random_search.predict(X_test)
     print(classification_report(y_test, y_pred_test, zero_division=0))
 
-    # Feature importance (optional, for interpretability)
-    feature_importance = pipeline.named_steps['classifier'].feature_importances_
+    # Feature importance
+    best_model = random_search.best_estimator_.named_steps['classifier']
     feature_names = ['pitch_mean', 'pitch_std', 'pitch_min', 'pitch_max', 
                      'rms_mean', 'rms_std'] + [f'mfcc_mean_{i}' for i in range(13)] + [f'mfcc_std_{i}' for i in range(13)]
     print("\nFeature Importance (LightGBM):")
-    for name, importance in zip(feature_names, feature_importance):
+    for name, importance in zip(feature_names, best_model.feature_importances_):
         print(f"{name}: {importance}")
 
-    return pipeline, imputer
+    return random_search.best_estimator_, imputer
 
 # --- 6. Apply Full Pipeline (for apply mode) ---
 def apply_full_pipeline(rttm_df, audio_base_path, trained_speech_model, feature_imputer):
