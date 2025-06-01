@@ -104,11 +104,11 @@ def extract_prosodic_features(y, sr):
 def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
     """
     Prepares feature vectors (X) and true labels (y) for training 
-    the CDS/OHS classifier, using existing CDS/OHS labels from the rttm_df.
+    the classifier, using existing labels from the rttm_df.
     Assumes rttm_df is already filtered by parse_rttm to include only EXPECTED_LABELS.
     """
     feature_vectors = []
-    true_cds_ohs_labels = []
+    true_labels = []
 
     print("\nPreparing data for LGBM classifier training...")
     for index, row in rttm_df.iterrows():
@@ -134,22 +134,22 @@ def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
         # Only include segments with non-NaN features
         if not any(np.isnan(f) for f in features): # More robust NaN check for list of features
             feature_vectors.append(features)
-            true_cds_ohs_labels.append(current_label)
+            true_labels.append(current_label)
         else:
             print(f"Segment {row['file_id']} at {row['start_time']}s has NaN features. Skipping.")
 
     if not feature_vectors:
-        print("No valid feature vectors collected for CDS/OHS training. Aborting.")
+        print("No valid feature vectors collected for LGBM training. Aborting.")
         return None, None
     
-    return np.array(feature_vectors), np.array(true_cds_ohs_labels)
+    return np.array(feature_vectors), np.array(true_labels)
 
 # --- 5. Training the Speech Classifier ---
 def train_lgbm_classifier(X, y):
     """
-    Trains a LightGBM classifier for CDS vs. OHS.
+    Trains a LightGBM classifier
     X: Feature vectors.
-    y: True labels ('CDS', 'OHS').
+    y: True labels
     """
     if X is None or y is None or len(X) == 0 or len(y) == 0:
         print("Cannot train classifier: No data provided.")
@@ -160,14 +160,14 @@ def train_lgbm_classifier(X, y):
     X_imputed = imputer.fit_transform(X)
 
     if X_imputed.shape[0] < 2 or len(np.unique(y)) < 2:
-        print("Not enough samples or classes to train a meaningful CDS/OHS classifier after imputation.")
+        print("Not enough samples or classes to train a meaningful LGBM classifier after imputation.")
         return None, None
 
     X_train, X_test, y_train, y_test = train_test_split(
         X_imputed, y, test_size=0.20, random_state=42, stratify=y
     )
     
-    print(f"Training CDS/OHS classifier with {len(X_train)} samples, testing with {len(X_test)} samples.")
+    print(f"Training LGBM classifier with {len(X_train)} samples, testing with {len(X_test)} samples.")
 
     # LightGBM classifier with basic parameters
     pipeline = Pipeline([
@@ -185,7 +185,7 @@ def train_lgbm_classifier(X, y):
 
     pipeline.fit(X_train, y_train)
 
-    print("\nCDS/OHS Classifier Performance on Test Set:")
+    print("\nLGBM Classifier Performance on Test Set:")
     y_pred_test = pipeline.predict(X_test)
     print(classification_report(y_test, y_pred_test, zero_division=0))
 
@@ -318,10 +318,10 @@ if __name__ == "__main__":
         trained_imputer = None 
 
         if X_features is not None and y_labels is not None and len(X_features) > 0:
-            # 2. Train the CDS/OHS classifier with LightGBM
+            # 2. Train the classifier with LightGBM
             trained_model, trained_imputer = train_lgbm_classifier(X_features, y_labels)
         else:
-            print("Skipping CDS/OHS model training due to lack of data.")
+            print("Skipping LGBM model training due to lack of data.")
         
         if trained_model and trained_imputer:
             print("\nClassifier training complete.")
