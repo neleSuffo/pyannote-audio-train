@@ -215,23 +215,23 @@ def train_lgbm_classifier(X, y, groups):
 
     # Define hyperparameter grid
     param_grid = {
-        'classifier__learning_rate': [0.01, 0.05, 0.1],  # 3 values
-        'classifier__num_leaves': [15, 31, 50],          # 3 values
-        'classifier__max_depth': [3, 5, -1],             # 3 values
-        'classifier__n_estimators': [50, 100, 200],      # 3 values
-        'classifier__min_child_samples': [10, 20, 50],   # 3 values
+        'classifier__learning_rate': [0.01, 0.1],  # 2 values
+        'classifier__num_leaves': [15, 31],          # 2 values
+        'classifier__max_depth': [5, -1],             # 2 values
+        'classifier__n_estimators': [50, 100],      # 2 values
+        'classifier__min_child_samples': [50, 100],   # 2 values
         'classifier__subsample': [0.8, 1.0],             # 2 values
         'classifier__colsample_bytree': [0.8, 1.0],      # 2 values
-        'classifier__scale_pos_weight': [1.0, 2.0]  # 2 values for class imbalance
+        'classifier__scale_pos_weight': [2.0, 3.0]  # 2 values for class imbalance
     }
 
-    # Total combinations: 3 × 3 × 3 × 3 × 3 × 2 × 2 × 2 = 486
+    # Total combinations: 2 ** 7 = 128 combinations
 
     # Perform Grid Search with cross-validation
     grid_search = GridSearchCV(
         pipeline,
         param_grid=param_grid,
-        scoring='f1_macro',  # Optimize for balanced performance across classes
+        scoring='f1',  # Optimize for balanced performance across classes
         cv=5,  # 5-fold cross-validation
         n_jobs=1,
         verbose=1
@@ -246,7 +246,7 @@ def train_lgbm_classifier(X, y, groups):
     # Evaluate on test set
     print("\nLGBM Classifier Performance on Test Set:")
     y_pred_test = grid_search.predict(X_test)
-    print(classification_report(y_test, y_pred_test, zero_division=0))
+    print(classification_report(y_test, y_pred_test, labels=['CDS', 'OHS'], target_names=['CDS', 'OHS'], zero_division=0))
 
     # Feature importance
     best_model = grid_search.best_estimator_.named_steps['classifier']
