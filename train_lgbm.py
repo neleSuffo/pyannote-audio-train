@@ -25,7 +25,7 @@ OUTPUT_CSV_PATH = "/home/nele_pauline_suffo/projects/pyannote-audio-train/final_
 
 RTTM_COLUMNS = ['type', 'file_id', 'channel', 'start_time', 'duration', 
                 'NA1', 'NA2', 'diarization_label', 'NA3', 'NA4', "child_id"]
-EXPECTED_LABELS = ["OHS", "CDS"] # Labels to be learned by the classifier
+EXPECTED_LABELS = [0, 1] # Labels to be learned by the classifier
 
 # --- 1. Parse RTTM ---
 def parse_rttm(rttm_content):
@@ -38,6 +38,9 @@ def parse_rttm(rttm_content):
                 start = float(parts[3])
                 duration = float(parts[4])
                 label = parts[7]
+                # convert label to int
+                if label.isdigit():
+                    label = int(label)
                 if label in EXPECTED_LABELS: 
                     data.append([parts[0], parts[1], int(parts[2]), start, duration, 
                                  parts[5], parts[6], label, parts[8] if len(parts) > 8 else None, parts[9] if len(parts) > 9 else None, parts[10] if len(parts) > 10 else None])
@@ -222,7 +225,7 @@ def train_lgbm_classifier(X, y, groups):
         'classifier__min_child_samples': [50, 100],   # 2 values
         'classifier__subsample': [0.8, 1.0],             # 2 values
         'classifier__colsample_bytree': [0.8, 1.0],      # 2 values
-        'classifier__scale_pos_weight': [2.0, 3.0]  # 2 values for class imbalance
+        'classifier__scale_pos_weight': [0.3, 0.5]  # 2 values for class imbalance
     }
 
     # Total combinations: 2 ** 7 = 128 combinations
@@ -231,7 +234,7 @@ def train_lgbm_classifier(X, y, groups):
     grid_search = GridSearchCV(
         pipeline,
         param_grid=param_grid,
-        scoring='f1',  # Optimize for balanced performance across classes
+        scoring='f1_macro',
         cv=5,  # 5-fold cross-validation
         n_jobs=1,
         verbose=1
@@ -246,7 +249,7 @@ def train_lgbm_classifier(X, y, groups):
     # Evaluate on test set
     print("\nLGBM Classifier Performance on Test Set:")
     y_pred_test = grid_search.predict(X_test)
-    print(classification_report(y_test, y_pred_test, labels=['CDS', 'OHS'], target_names=['CDS', 'OHS'], zero_division=0))
+    print(classification_report(y_test, y_pred_test, zero_division=0))
 
     # Feature importance
     best_model = grid_search.best_estimator_.named_steps['classifier']
