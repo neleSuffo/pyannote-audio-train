@@ -7,7 +7,7 @@ import pandas as pd
 import lightgbm as lgb
 import parselmouth
 import soundfile as sf
-from sklearn.model_selection import RandomizedSearchCV, train_test_split
+from sklearn.model_selection import GridSearchCV, train_test_split, StratifiedGroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report
@@ -24,7 +24,7 @@ IMPUTER_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/lgb
 OUTPUT_CSV_PATH = "/home/nele_pauline_suffo/projects/pyannote-audio-train/final_classifications.csv"
 
 RTTM_COLUMNS = ['type', 'file_id', 'channel', 'start_time', 'duration', 
-                'NA1', 'NA2', 'diarization_label', 'NA3', 'NA4']
+                'NA1', 'NA2', 'diarization_label', 'NA3', 'NA4', "child_id"]
 EXPECTED_LABELS = ["OHS", "CDS"] # Labels to be learned by the classifier
 
 # --- 1. Parse RTTM ---
@@ -40,7 +40,7 @@ def parse_rttm(rttm_content):
                 label = parts[7]
                 if label in EXPECTED_LABELS: 
                     data.append([parts[0], parts[1], int(parts[2]), start, duration, 
-                                 parts[5], parts[6], label, parts[8] if len(parts) > 8 else None, parts[9] if len(parts) > 9 else None])
+                                 parts[5], parts[6], label, parts[8] if len(parts) > 8 else None, parts[9] if len(parts) > 9 else None, parts[10] if len(parts) > 10 else None])
             except ValueError as e:
                 print(f"Skipping line due to parsing error (start/duration/channel): {line} - {e}")
             except IndexError as e:
@@ -109,6 +109,7 @@ def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
     """
     feature_vectors = []
     true_labels = []
+    group_ids = [] # To store group identifiers (child_id)
 
     print("\nPreparing data for LGBM classifier training...")
     for index, row in rttm_df.iterrows():
@@ -135,21 +136,24 @@ def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
         if not any(np.isnan(f) for f in features): # More robust NaN check for list of features
             feature_vectors.append(features)
             true_labels.append(current_label)
+            group_ids.append(row['child_id']) # Add file_id as group identifier
         else:
-            print(f"Segment {row['file_id']} at {row['start_time']}s has NaN features. Skipping.")
+            print(f"Segment {row['child_id']} at {row['start_time']}s has NaN features. Skipping.")
 
     if not feature_vectors:
         print("No valid feature vectors collected for LGBM training. Aborting.")
-        return None, None
+        return None, None, None # Adjusted return
     
-    return np.array(feature_vectors), np.array(true_labels)
+    return np.array(feature_vectors), np.array(true_labels), np.array(group_ids) # Adjusted return
 
 # --- 5. Training the Speech Classifier ---
-def train_lgbm_classifier(X, y):
+def train_lgbm_classifier(X, y, groups):
     """
-    Trains a LightGBM classifier with hyperparameter tuning.
+    Trains a LightGBM classifier with hyperparameter tuning,
+    splitting data while keeping groups intact.
     X: Feature vectors.
     y: True labels
+    groups: Group identifiers for each sample in X and y.
     """
     if X is None or y is None or len(X) == 0 or len(y) == 0:
         print("Cannot train classifier: No data provided.")
@@ -163,63 +167,96 @@ def train_lgbm_classifier(X, y):
         print("Not enough samples or classes to train a meaningful LGBM classifier after imputation.")
         return None, None
 
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_imputed, y, test_size=0.20, random_state=42, stratify=y
-    )
+    # Split data using StratifiedGroupKFold
+    if groups is None or len(groups) != X_imputed.shape[0]:
+        print("Group information is missing or mismatched. Falling back to standard stratified split (groups not kept together).")
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_imputed, y, test_size=0.20, random_state=42, stratify=y
+        )
+    else:
+        n_splits_for_group_split = 5  # For a test_size of 0.20 (1/5)
+        sgkf = StratifiedGroupKFold(n_splits=n_splits_for_group_split, shuffle=True, random_state=42)
+        
+        try:
+            # Get the first (and only needed) split
+            train_idx, test_idx = next(sgkf.split(X_imputed, y, groups))
+            
+            X_train, X_test = X_imputed[train_idx], X_imputed[test_idx]
+            y_train, y_test = y[train_idx], y[test_idx]
+            
+            train_groups_set = set(groups[train_idx])
+            test_groups_set = set(groups[test_idx])
+            
+            print(f"Data split using StratifiedGroupKFold: {len(X_train)} train samples, {len(X_test)} test samples.")
+            print(f"Number of unique groups in train: {len(train_groups_set)}, in test: {len(test_groups_set)}")
+
+            if not train_groups_set.isdisjoint(test_groups_set):
+                print("Warning: Group overlap detected between train and test sets. This should not happen with StratifiedGroupKFold.")
+            else:
+                print("No group overlap between train and test sets, as expected.")
+
+        except ValueError as e:
+            print(f"Error during StratifiedGroupKFold split (e.g., a class is not present in enough groups for {n_splits_for_group_split} splits): {e}")
+            print("Falling back to standard stratified split (groups not kept together).")
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_imputed, y, test_size=0.20, random_state=42, stratify=y
+            )
     
     print(f"Training LGBM classifier with {len(X_train)} samples, testing with {len(X_test)} samples.")
+    print(f"Training labels distribution: {pd.Series(y_train).value_counts().to_dict()}")
+    if len(y_test) > 0:
+        print(f"Test labels distribution: {pd.Series(y_test).value_counts().to_dict()}")
 
     # Define pipeline
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
-        ('classifier', lgb.LGBMClassifier(random_state=42, verbose=-1))
+        ('classifier', lgb.LGBMClassifier(random_state=42, verbose=-1, n_jobs=1))
     ])
 
-    # Define hyperparameter search space
-    param_distributions = {
-        'classifier__learning_rate': [0.01, 0.05, 0.1, 0.2],
-        'classifier__num_leaves': [15, 31, 50, 100],
-        'classifier__max_depth': [3, 5, 7, -1],  # -1 means no limit
-        'classifier__n_estimators': [50, 100, 200, 300],
-        'classifier__min_child_samples': [10, 20, 50, 100],
-        'classifier__subsample': [0.6, 0.8, 1.0],
-        'classifier__colsample_bytree': [0.6, 0.8, 1.0],
-        'classifier__scale_pos_weight': [1.0, 2.0, 3.0]  
+    # Define hyperparameter grid
+    param_grid = {
+        'classifier__learning_rate': [0.01, 0.05, 0.1],  # 3 values
+        'classifier__num_leaves': [15, 31, 50],          # 3 values
+        'classifier__max_depth': [3, 5, -1],             # 3 values
+        'classifier__n_estimators': [50, 100, 200],      # 3 values
+        'classifier__min_child_samples': [10, 20, 50],   # 3 values
+        'classifier__subsample': [0.8, 1.0],             # 2 values
+        'classifier__colsample_bytree': [0.8, 1.0],      # 2 values
+        'classifier__scale_pos_weight': [1.0, 2.0]  # 2 values for class imbalance
     }
 
-    # Perform Randomized Search with cross-validation
-    random_search = RandomizedSearchCV(
+    # Total combinations: 3 × 3 × 3 × 3 × 3 × 2 × 2 × 2 = 486
+
+    # Perform Grid Search with cross-validation
+    grid_search = GridSearchCV(
         pipeline,
-        param_distributions=param_distributions,
-        n_iter=50,  # Number of parameter combinations to try
+        param_grid=param_grid,
         scoring='f1_macro',  # Optimize for balanced performance across classes
         cv=5,  # 5-fold cross-validation
-        random_state=42,
-        n_jobs=24,  
+        n_jobs=2,
         verbose=1
     )
 
-    random_search.fit(X_train, y_train)
+    grid_search.fit(X_train, y_train)
 
     # Print best parameters and score
-    print("\nBest Hyperparameters:", random_search.best_params_)
-    print("Best Cross-Validation F1 Score:", random_search.best_score_)
+    print("\nBest Hyperparameters:", grid_search.best_params_)
+    print("Best Cross-Validation F1 Score:", grid_search.best_score_)
 
     # Evaluate on test set
-    print("\nCDS/OHS Classifier Performance on Test Set:")
-    y_pred_test = random_search.predict(X_test)
+    print("\nLGBM Classifier Performance on Test Set:")
+    y_pred_test = grid_search.predict(X_test)
     print(classification_report(y_test, y_pred_test, zero_division=0))
 
     # Feature importance
-    best_model = random_search.best_estimator_.named_steps['classifier']
+    best_model = grid_search.best_estimator_.named_steps['classifier']
     feature_names = ['pitch_mean', 'pitch_std', 'pitch_min', 'pitch_max', 
                      'rms_mean', 'rms_std'] + [f'mfcc_mean_{i}' for i in range(13)] + [f'mfcc_std_{i}' for i in range(13)]
     print("\nFeature Importance (LightGBM):")
     for name, importance in zip(feature_names, best_model.feature_importances_):
         print(f"{name}: {importance}")
 
-    return random_search.best_estimator_, imputer
+    return grid_search.best_estimator_, imputer
 
 # --- 6. Apply Full Pipeline (for apply mode) ---
 def apply_full_pipeline(rttm_df, audio_base_path, trained_speech_model, feature_imputer):
@@ -334,16 +371,16 @@ if __name__ == "__main__":
         
         print(f"\nParsed RTTM data for training ({len(rttm_df)} segments with expected labels)")
 
-        X_features, y_labels = prepare_lgbm_classifier_data(rttm_df, AUDIO_DIR)
+        X_features, y_labels, group_ids = prepare_lgbm_classifier_data(rttm_df, AUDIO_DIR)
 
         trained_model = None
         trained_imputer = None 
 
-        if X_features is not None and y_labels is not None and len(X_features) > 0:
+        if X_features is not None and y_labels is not None and group_ids is not None and len(X_features) > 0:
             # 2. Train the classifier with LightGBM
-            trained_model, trained_imputer = train_lgbm_classifier(X_features, y_labels)
+            trained_model, trained_imputer = train_lgbm_classifier(X_features, y_labels, group_ids)
         else:
-            print("Skipping LGBM model training due to lack of data.")
+            print("Skipping LGBM model training due to lack of data or group_ids.")
         
         if trained_model and trained_imputer:
             print("\nClassifier training complete.")
