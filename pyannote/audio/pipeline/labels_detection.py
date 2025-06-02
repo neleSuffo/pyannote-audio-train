@@ -39,10 +39,10 @@ from pyannote.audio.utils.signal import Binarize
 from pyannote.core import Annotation
 from pyannote.core import SlidingWindowFeature
 # https://github.com/orasanen/ALICE/issues/21
-# from pyannote.metrics.detection import DetectionPrecision
-# from pyannote.metrics.detection import DetectionRecall
-# from pyannote.metrics.detection import DetectionErrorRate
-# from pyannote.metrics.detection import DetectionPrecisionRecallFMeasure
+from pyannote.metrics.detection import DetectionPrecision
+from pyannote.metrics.detection import DetectionRecall
+from pyannote.metrics.detection import DetectionErrorRate
+from pyannote.metrics.detection import DetectionPrecisionRecallFMeasure
 from pyannote.pipeline import Pipeline
 from pyannote.pipeline.parameter import Uniform
 
@@ -153,15 +153,15 @@ class MultilabelDetection(Pipeline):
 
     def get_metric(self, parallel=False): #-> Union[DetectionErrorRate, DetectionPrecisionRecallFMeasure]:
         """Return new instance of detection metric"""
-        raise NotImplementedError("Can't compute metrics due to : https://github.com/orasanen/ALICE/issues/21")
-        # if self.fscore:
-        #     return DetectionPrecisionRecallFMeasure(collar=0.0,
-        #                                             skip_overlap=False,
-        #                                             parallel=parallel)
-        # else:
-        #     return DetectionErrorRate(collar=0.0,
-        #                               skip_overlap=False,
-        #                               parallel=parallel)
+        #raise NotImplementedError("Can't compute metrics due to : https://github.com/orasanen/ALICE/issues/21")
+        if self.fscore:
+            return DetectionPrecisionRecallFMeasure(collar=0.0,
+                                                    skip_overlap=False,
+                                                    parallel=parallel)
+        else:
+            return DetectionErrorRate(collar=0.0,
+                                      skip_overlap=False,
+                                      parallel=parallel)
 
     def loss(self, current_file: dict, hypothesis=None):
         reference = current_file['annotation']
