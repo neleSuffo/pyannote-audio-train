@@ -136,7 +136,7 @@ def prepare_lgbm_classifier_data(rttm_df, audio_base_path):
         if not any(np.isnan(f) for f in features): # More robust NaN check for list of features
             feature_vectors.append(features)
             true_labels.append(current_label)
-            group_ids.append(row['child_id']) # Add file_id as group identifier
+            group_ids.append(row['child_id'])
         else:
             print(f"Segment {row['child_id']} at {row['start_time']}s has NaN features. Skipping.")
 
@@ -233,7 +233,7 @@ def train_lgbm_classifier(X, y, groups):
         param_grid=param_grid,
         scoring='f1_macro',  # Optimize for balanced performance across classes
         cv=5,  # 5-fold cross-validation
-        n_jobs=2,
+        n_jobs=1,
         verbose=1
     )
 
