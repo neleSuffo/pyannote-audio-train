@@ -26,6 +26,7 @@ AUDIO_DIR = "/home/nele_pauline_suffo/ProcessedData/childlens_audio"
 TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/complete.rttm"
 MODEL_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_3/lgbm_classifier.pkl'
 IMPUTER_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/lgbm_imputer.pkl'
+PERFORMANCE_SUMMARY_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_3/model_performance_summary.csv'
 
 # --- Apply Mode Configuration ---
 OUTPUT_CSV_PATH = "/home/nele_pauline_suffo/projects/pyannote-audio-train/final_classifications.csv"
@@ -216,10 +217,7 @@ def train_classifiers(X, y, groups):
                 X_imputed, y, test_size=0.20, random_state=42, stratify=y
             )
     
-    print(f"Training LGBM classifier with {len(X_train)} samples, testing with {len(X_test)} samples.")
     print(f"Training labels distribution: {pd.Series(y_train).value_counts().to_dict()}")
-    if len(y_test) > 0:
-        print(f"Test labels distribution: {pd.Series(y_test).value_counts().to_dict()}")
 
     # Calculate class imbalance ratio (OHS/CDS ≈ 3000/9000 ≈ 0.33 for CDS as positive class)
     if sum(y_train == 1) > 0: # Ensure there are positive samples to avoid division by zero
@@ -319,6 +317,8 @@ def train_classifiers(X, y, groups):
     best_model_name = None
     feature_names = ['pitch_mean', 'pitch_std', 'pitch_min', 'pitch_max', 
                      'rms_mean', 'rms_std'] + [f'mfcc_mean_{i}' for i in range(13)] + [f'mfcc_std_{i}' for i in range(13)]
+    
+    all_model_performances = [] # To store performance of each model
 
     for model_name, config in models.items():
         print(f"\nTraining {model_name}...")
@@ -326,6 +326,8 @@ def train_classifiers(X, y, groups):
             ('scaler', StandardScaler()),
             ('classifier', config['classifier'])
         ])
+        
+        current_cv_score = None # Initialize cv_score for the current model
 
         # Perform Grid Search (skip for Naive Bayes if param_grid is empty)
         if config['param_grid']:
@@ -339,20 +341,49 @@ def train_classifiers(X, y, groups):
             )
             grid_search.fit(X_train, y_train)
             model = grid_search.best_estimator_
-            cv_score = grid_search.best_score_
+            current_cv_score = grid_search.best_score_ # CV score on training data
             print(f"Best Hyperparameters for {model_name}:", grid_search.best_params_)
+            print(f"Best CV F1 Macro Score for {model_name}: {current_cv_score:.4f}")
         else:
             # For Naive Bayes
             pipeline.fit(X_train, y_train)
             model = pipeline
-            cv_score = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='f1_macro').mean()
+            # Calculate CV score manually for models without GridSearchCV
+            current_cv_score = cross_val_score(pipeline, X_train, y_train, cv=5, scoring='f1_macro').mean()
+            print(f"CV F1 Macro Score for {model_name}: {current_cv_score:.4f}")
 
         # Evaluate on test set
         y_pred_test = model.predict(X_test)
         print(f"\n{model_name} Performance on Test Set:")
-        print(classification_report(y_test, y_pred_test, zero_division=0))
+        report_str = classification_report(y_test, y_pred_test, zero_division=0)
+        print(report_str)
 
+        report_dict = classification_report(y_test, y_pred_test, zero_division=0, output_dict=True)
+
+# Store performance metrics
+        # Ensure labels '0' and '1' exist in the report_dict, otherwise use placeholder
+        class_0_metrics = report_dict.get('0', {'precision': 0, 'recall': 0, 'f1-score': 0, 'support':0})
+        class_1_metrics = report_dict.get('1', {'precision': 0, 'recall': 0, 'f1-score': 0, 'support':0})
+
+        model_performance = {
+            'model_name': model_name,
+            'cv_f1_macro': current_cv_score,
+            'test_accuracy': report_dict.get('accuracy', 0),
+            'test_f1_macro': report_dict.get('macro avg', {}).get('f1-score', 0),
+            'test_precision_class_0': class_0_metrics.get('precision', 0),
+            'test_recall_class_0': class_0_metrics.get('recall', 0),
+            'test_f1_class_0': class_0_metrics.get('f1-score', 0),
+            'test_support_class_0': class_0_metrics.get('support',0),
+            'test_precision_class_1': class_1_metrics.get('precision', 0),
+            'test_recall_class_1': class_1_metrics.get('recall', 0),
+            'test_f1_class_1': class_1_metrics.get('f1-score', 0),
+            'test_support_class_1': class_1_metrics.get('support',0),
+            'best_params': grid_search.best_params_ if config['param_grid'] else 'N/A'
+        }
+        all_model_performances.append(model_performance)
+        
         # Track best model based on macro F1
+        test_f1_macro = report_dict.get('macro avg', {}).get('f1-score', 0)
         f1_macro = f1_score(y_test, y_pred_test, average='macro', zero_division=0)
         if f1_macro > best_f1_macro:
             best_f1_macro = f1_macro
@@ -371,7 +402,16 @@ def train_classifiers(X, y, groups):
             for name, c in zip(feature_names, coef):
                 print(f"{name}: {c}")
 
-    print(f"\nBest Model: {best_model_name} with Macro F1 Score: {best_f1_macro}")
+    print(f"\nBest Model based on Test Set Macro F1: {best_model_name} with Macro F1 Score: {best_f1_macro:.4f}")
+
+    # Save all model performances to a CSV
+    performance_df = pd.DataFrame(all_model_performances)
+    try:
+        performance_df.to_csv(PERFORMANCE_SUMMARY_PATH, index=False)
+        print(f"\nModel performance summary saved to: {PERFORMANCE_SUMMARY_PATH}")
+    except Exception as e:
+        print(f"\nError saving model performance summary: {e}")
+        
     return best_model, imputer
 
 # --- 6. Apply Full Pipeline (for apply mode) ---
