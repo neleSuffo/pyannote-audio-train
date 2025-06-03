@@ -15,9 +15,9 @@ import joblib
 # --- Configuration ---
 AUDIO_DIR = "/home/nele_pauline_suffo/ProcessedData/childlens_audio"
 # --- Training Mode Configuration ---
-TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/complete.rttm"
-MODEL_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/speech_classifier_pipeline.pkl'
-IMPUTER_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/speech_feature_imputer.pkl'
+TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/complete.rttm"
+MODEL_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_3/lgbm_classifier.pkl'
+IMPUTER_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/lgbm_imputer.pkl'
 
 # --- Evaluate Mode Configuration ---
 OUTPUT_CSV_PATH = "/home/nele_pauline_suffo/projects/pyannote-audio-train/final_classifications.csv"
