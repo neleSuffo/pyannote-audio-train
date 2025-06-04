@@ -7,6 +7,4 @@ task: frame-wise multi-label classification
 y:
   classes:
   - KCHI
-  - CDS
-  - OHS
   - SPEECH
