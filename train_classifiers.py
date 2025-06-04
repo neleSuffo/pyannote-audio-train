@@ -24,9 +24,9 @@ from sklearn.neural_network import MLPClassifier
 AUDIO_DIR = "/home/nele_pauline_suffo/ProcessedData/childlens_audio"
 # --- Training Mode Configuration ---
 TRAIN_RTTM_FILE_PATH = "/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/complete.rttm"
-MODEL_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_3/lgbm_classifier.pkl'
+MODEL_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/lgbm_classifier.pkl'
 IMPUTER_SAVE_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/lgbm_imputer.pkl'
-PERFORMANCE_SUMMARY_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_3/model_performance_summary.csv'
+PERFORMANCE_SUMMARY_PATH = '/home/nele_pauline_suffo/ProcessedData/vtc_childlens_v3/model_performance_summary.csv'
 
 # --- Apply Mode Configuration ---
 OUTPUT_CSV_PATH = "/home/nele_pauline_suffo/projects/pyannote-audio-train/final_classifications.csv"
@@ -260,7 +260,7 @@ def train_classifiers(X, y, groups):
             }
         },
         'MLP': {
-            'classifier': MLPClassifier(random_state=42, max_iter=500),
+            'classifier': MLPClassifier(random_state=42, max_iter=1000),
             'param_grid': {
                 'classifier__hidden_layer_sizes': [(50,), (100,), (50, 50)],
                 'classifier__learning_rate_init': [0.001, 0.01],
