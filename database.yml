@@ -1,20 +1,20 @@
 Databases:
-  ChildLens_v2: /home/nele_pauline_suffo/ProcessedData/childlens_audio/{uri}.wav
+  ChildLens: /home/nele_pauline_suffo/ProcessedData/childlens_audio/{uri}.wav
   #MUSAN: ./musan/{uri}.wav
 
 Protocols:
-  ChildLens_v2:
+  ChildLens:
     SpeakerDiarization:
       audio:
         train:
-            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train.lst
-            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train.rttm
-            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/train.uem
+            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/train.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/train.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/train.uem
         development:
-            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/dev.lst
-            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/dev.rttm
-            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/dev.uem
+            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/dev.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/dev.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/dev.uem
         test:
-            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.lst
-            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.rttm
-            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens_v2/test.uem
+            uri: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/test.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/test.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/vtc_childlens/test.uem

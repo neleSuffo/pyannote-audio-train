@@ -1,50 +1,50 @@
 CHI:
-  detection_fscore: 0.20891033449509155
+  detection_fscore: 0.0
   params:
     min_duration_off: 0.1
     min_duration_on: 0.1
-    offset: 0.058805296109656874
-    onset: 0.058805296109656874
+    offset: 0.9918693812442166
+    onset: 0.9918693812442166
     pad_offset: 0.0
     pad_onset: 0.0
 FEM:
-  detection_fscore: 0.681594191325932
+  detection_fscore: 0.3815934749617953
   params:
     min_duration_off: 0.1
     min_duration_on: 0.1
-    offset: 0.43966696043334563
-    onset: 0.43966696043334563
+    offset: 0.12281831765504683
+    onset: 0.12281831765504683
     pad_offset: 0.0
     pad_onset: 0.0
 KCHI:
-  detection_fscore: 0.7273379758501081
+  detection_fscore: 0.5874458055203495
   params:
     min_duration_off: 0.1
     min_duration_on: 0.1
-    offset: 0.38546052450033996
-    onset: 0.38546052450033996
+    offset: 0.39232238572708433
+    onset: 0.39232238572708433
     pad_offset: 0.0
     pad_onset: 0.0
 MAL:
-  detection_fscore: 0.5734887652035945
+  detection_fscore: 0.0
   params:
     min_duration_off: 0.1
     min_duration_on: 0.1
-    offset: 0.3013111811577422
-    onset: 0.3013111811577422
+    offset: 0.9918693812442166
+    onset: 0.9918693812442166
     pad_offset: 0.0
     pad_onset: 0.0
 SPEECH:
-  detection_fscore: 0.8733112348857446
+  detection_fscore: 0.8464267134230602
   params:
     min_duration_off: 0.1
     min_duration_on: 0.1
-    offset: 0.41554719479639
-    onset: 0.41554719479639
+    offset: 0.33724361752179016
+    onset: 0.33724361752179016
     pad_offset: 0.0
     pad_onset: 0.0
-average_detection_fscore: 0.6129285003520941
-epoch: 150
+average_detection_fscore: 0.36309319878104096
+epoch: 100
 labels_spec:
   intersection: {}
   regular:
