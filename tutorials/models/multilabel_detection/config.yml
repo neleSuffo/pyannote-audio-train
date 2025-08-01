@@ -7,9 +7,9 @@ architecture:
       - 128
     rnn:
       bidirectional: true
-      dropout: 0.1
-      hidden_size: 256
-      num_layers: 4
+      dropout: 0
+      hidden_size: 128
+      num_layers: 3
       unit: LSTM
     sincnet:
       kernel_size:
@@ -33,7 +33,7 @@ task:
   name: MultilabelDetection
   params:
     batch_size: 64
-    duration: 3.0
+    duration: 2.0
     labels_spec:
       regular:
       - KCHI
@@ -41,4 +41,4 @@ task:
       - MAL
       - FEM
       - SPEECH
-    per_epoch: 2
+    per_epoch: 1
