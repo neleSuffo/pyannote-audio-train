@@ -1,0 +1,19 @@
+Databases:
+  ChildLens: /home/nele_pauline_suffo/ProcessedData/childlens_audio/{uri}.wav
+
+Protocols:
+  ChildLens:
+    SpeakerDiarization:
+      audio:
+        train:
+            uri: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/train.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/train.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/train.uem
+        development:
+            uri: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/dev.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/dev.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/dev.uem
+        test:
+            uri: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/test.lst
+            annotation: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/test.rttm
+            annotated: /home/nele_pauline_suffo/ProcessedData/audio_cls_input/test.uem
