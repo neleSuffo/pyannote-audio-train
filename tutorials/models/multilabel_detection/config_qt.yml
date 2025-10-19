@@ -1,0 +1,42 @@
+architecture:
+  name: pyannote.audio.models.PyanNet
+  params:
+    ff:
+      hidden_size:
+      - 256
+      - 256
+    rnn:
+      bidirectional: true
+      dropout: 0.15
+      hidden_size: 256
+      num_layers: 4
+      unit: LSTM
+    sincnet:
+      kernel_size:
+      - 251
+      - 5
+      - 5
+      out_channels:
+      - 256
+      - 64
+      - 64
+feature_extraction:
+  name: RawAudio
+  params:
+    sample_rate: 16000
+scheduler:
+  name: CyclicScheduler
+  params:
+    epochs_per_cycle: 14
+    learning_rate: 0.001
+task:
+  name: MultilabelDetection
+  params:
+    batch_size: 64
+    duration: 3.0
+    labels_spec:
+      regular:
+      - KCHI
+      - KCDS
+      - OHS
+    per_epoch: 2
