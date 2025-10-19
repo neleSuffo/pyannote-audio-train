@@ -1,0 +1,36 @@
+KCDS:
+  detection_fscore: 0.4262715908857234
+  params:
+    min_duration_off: 0.1
+    min_duration_on: 0.1
+    offset: 0.24013328687768137
+    onset: 0.24013328687768137
+    pad_offset: 0.0
+    pad_onset: 0.0
+KCHI:
+  detection_fscore: 0.49331663059580044
+  params:
+    min_duration_off: 0.1
+    min_duration_on: 0.1
+    offset: 0.24013328687768137
+    onset: 0.24013328687768137
+    pad_offset: 0.0
+    pad_onset: 0.0
+OHS:
+  detection_fscore: 0.0
+  params:
+    min_duration_off: 0.1
+    min_duration_on: 0.1
+    offset: 0.9918693812442166
+    onset: 0.9918693812442166
+    pad_offset: 0.0
+    pad_onset: 0.0
+average_detection_fscore: 0.30652940716050797
+epoch: 1
+labels_spec:
+  intersection: {}
+  regular:
+  - KCHI
+  - KCDS
+  - OHS
+  union: {}
